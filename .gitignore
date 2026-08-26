@@ -1,0 +1,35 @@
+# Prose business/pitch material -- not engineering artifacts. Kept out of this
+# repo's git history on principle (same "prose vs engineering artifacts"
+# separation the GeoBind/Talus precedent uses), independent of any shared-remote
+# concern since this repo has its own dedicated remote. See business/ for the
+# actual docs on disk.
+business/
+
+# Downloaded/raw datasets -- large, re-fetchable, never committed.
+data/raw/
+data/*.zip
+data/*.edf
+data/*.tar.gz
+
+# Generated pipeline outputs -- regenerate, don't expect to be checked in.
+outputs/graphs/
+outputs/audits/
+outputs/reproducibility/
+
+# Real third-party contact data (names, titles, LinkedIn profile URLs) derived from the
+# user's own LinkedIn export -- same convention job_os uses for its own contact reports.
+# Never committed, regenerate locally via src/contacts/neurotech_contact_matching.py.
+outputs/contacts/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
