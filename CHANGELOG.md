@@ -2,6 +2,27 @@
 
 All notable changes to Riddler are recorded here, most recent first.
 
+## 2026-08-26 — Contacts matched; Merge Labs application materials drafted (job_os)
+
+- `src/contacts/neurotech_contact_matching.py` run for real: 18 LinkedIn connections matched across 5 of the
+  16 tracked companies (Precision Neuroscience 7, Beacon Biosignals 5, Cognito Therapeutics 4, Synchron 1,
+  Neuralink 1). Ceribell — the top market-research target — had zero LinkedIn matches, flagged as the best
+  candidate for cold/warm-adjacent outreach rather than a direct connection. Output gitignored
+  (`outputs/contacts/`, third-party PII, same convention as job_os's own contact reports).
+- Given Merge Labs' upgraded strategic significance (see prior entry), pulled its job_os scoring detail: of 23
+  tracked postings, only 3 have gone through job_os's full LLM scoring pass — Data Scientist, Bioengineering
+  (free 70, LLM overall 68 — highest of the three), ML Research Scientist – Computational Biophysics (free 70,
+  LLM overall 62), ML Research Scientist – De Novo Design (free 65, LLM overall 62). All three
+  `BRIDGEABLE_MEDIUM` / `BRIDGE_THEN_APPLY`.
+- Generated tailored resume + cover letter for the two highest-scored roles (Data Scientist, Bioengineering;
+  ML Research Scientist, Computational Biophysics) via job_os's `generate_tailored_resumes.py` — real
+  Claude-backed generation against `MASTER_RESUME.md` + `candidate_profile.yaml` + the actual job descriptions,
+  not fabricated. Both drafts name real capability gaps directly (OMICS/BoTorch for the Bioengineering role;
+  hands-on MD simulation — GROMACS/AMBER/OpenMM — for the Computational Biophysics role) rather than glossing
+  over them. Files live in job_os's own `applications/ashby_Merge Labs_7c1be553.../` and
+  `applications/ashby_Merge Labs_be78d50e.../` — not duplicated into this repo, same "reference job_os in
+  place" principle used for the LinkedIn export. **Not submitted** — drafts pending the user's review.
+
 ## 2026-08-26 — Verified two pass-1 flags: Synchron data collision, Merge Labs product scope
 
 - **Synchron**: confirmed the company-name-collision flag. 16 of the original 23 "Synchron" TRACKER.csv rows
