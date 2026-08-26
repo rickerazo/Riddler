@@ -2,6 +2,23 @@
 
 All notable changes to Riddler are recorded here, most recent first.
 
+## 2026-08-26 — Track B lit review, pass 1 (job_os data mining)
+
+- `business/lit_review_business_v1.md` drafted: mined job_os's already-scraped `TRACKER.csv` (46,202 rows,
+  filtered to the 16 tracked neurotech companies), the one available full job-posting text (Paradromics), and
+  job_os's own scored `fit_report.md` for Ceribell — zero new scraping, per the plan's pass-1 sequencing.
+- Strongest finding: Ceribell has an open "Senior Manager, Applied AI Engineering" role and its highest-scored
+  posting explicitly values EEG-CNN/RNN production experience — the most concrete genAI/ML signal of any
+  tracked company.
+- Honest negative finding: 11 of 16 companies show no usable genAI signal in job_os's scraped data at all
+  (non-technical current postings, or zero rows for Zeto/Precision Neuroscience) — flagged as needing pass 2
+  (external research), not rounded up to a conclusion about those companies' actual genAI usage.
+- Data-quality flag raised, not resolved: several "Synchron" TRACKER.csv rows read like Synchrony (the
+  financial company) — needs manual verification before use in market_research_v1.md.
+- job_os's own `ai_enablement` role-family tag confirmed unreliable on its own (2 of 3 hits in this company set
+  look like taxonomy false positives per job_os's own documented caveat) — only acted on when corroborated by
+  the actual job title.
+
 ## 2026-08-25 — Workspace scaffolded
 
 - Riddler created as a standalone repo at `/Users/rick/Projectz/Riddler/`, ported from GeoBind's
