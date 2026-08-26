@@ -2,6 +2,20 @@
 
 All notable changes to Riddler are recorded here, most recent first.
 
+## 2026-08-26 — Verified two pass-1 flags: Synchron data collision, Merge Labs product scope
+
+- **Synchron**: confirmed the company-name-collision flag. 16 of the original 23 "Synchron" TRACKER.csv rows
+  were actually Synchrony (the financial-services company) via a `builtincincinnati` "recent" search. Corrected
+  to the real 7-row picture: San Diego device-engineering/quality/regulatory roles, no dedicated ML/AI roles.
+- **Merge Labs**: web-search-verified and substantially upgraded from job_os's stale "~30 employees, newest
+  entrant" note. Came out of stealth 2026-01-15 with a $250M seed round at an $850M valuation, OpenAI writing
+  the largest single check. Pursuing non-invasive ultrasound + molecular-engineering BCI (not electrode-based) —
+  explains job_os's biophysics/de-novo-design/immunotolerization role titles, which looked anomalous before
+  verification. Now flagged as the single most strategically relevant company in the tiered list, given its
+  direct genAI-industry backing.
+- `business/market_research_v1.md` §2/§3 and `business/lit_review_business_v1.md` updated with both
+  corrections and full source citations.
+
 ## 2026-08-26 — Track B lit review, pass 1 (job_os data mining)
 
 - `business/lit_review_business_v1.md` drafted: mined job_os's already-scraped `TRACKER.csv` (46,202 rows,
