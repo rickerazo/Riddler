@@ -1,14 +1,32 @@
-# Handoff — 2026-08-26
+# Handoff — 2026-11-17
 
 Session-continuity note for picking this back up (by a future Claude session or by Ricardo directly). See
-`CHANGELOG.md` for the detailed chronological log this summarizes; see the original kickoff plan at
-`/Users/rick/.claude/plans/recursive-soaring-bengio.md` for the full phased plan this is executing against.
+`CHANGELOG.md` for the detailed chronological log this summarizes, and `ROADMAP.md` for the phased
+implementation plan with exit gates (this supersedes the kickoff plan at
+`/Users/rick/.claude/plans/recursive-soaring-bengio.md` for engineering sequencing).
+
+**Working rule:** every turn ends with HANDOFF + CHANGELOG updated, a commit, a push to `origin/master`, and a
+suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 
 ## Where things actually stand
 
+**Latest (2026-11-17):**
+- GitHub remote live: `origin` = `github.com:rickerazo/Riddler.git`; `master` is pushed and current.
+  (An old side branch, `roadmap-and-first-data`, is fully merged and can be deleted.)
+- First real data: `data/raw/chbmit/chb01/chb01_03.edf` + `chb01-summary.txt` (gitignored; fetch steps in
+  `outputs/exploration/README.md`). Seizure annotated 2996–3036 s.
+- Exploration figures + scripts tracked in `outputs/exploration/`: control-vs-seizure traces, a channel×band
+  hotspot heatmap (right temporal leads), and a perturbation demo (amplitude ×0.5 → delta power 0.25;
+  phase scramble → 1.03). Exploration only, not pipeline code.
+- `ROADMAP.md` written: Phases 1–5 with exit gates; Epileptor simulation layer at Phase 4 as the ground-truth
+  benchmark with a pre-registered go/no-go against SHAP/occlusion.
+- Environment: project-local `.venv/` (Python 3.14, MNE 1.13) because the mamba package cache is corrupted.
+  This deviates from CLAUDE.md's 3.11; still an open decision for Ricardo.
+- **Still true:** every `src/core/*.py` stage is a stub, and there is no seizure detector yet.
+
+**Earlier work (2026-08-26), still accurate unless noted:**
 **Done and real** (not placeholder):
-- Repo scaffolded at `/Users/rick/Projectz/Riddler/`, own local git repo, **no GitHub remote yet** — that's an
-  explicit hold pending your go-ahead, not an oversight.
+- Repo scaffolded at `/Users/rick/Projectz/Riddler/` (GitHub remote now live, see above).
 - Platform-core/modality-module architecture ported from GeoBind (`CLAUDE.md`, `ARCHITECTURE.md`) — most
   `src/core/*.py` are intentionally documented stubs (`raise NotImplementedError`), not fake implementations.
   The synthetic smoke test (`src/run_pipeline_smoke_test.py`) runs and stops cleanly at the first unimplemented
@@ -40,26 +58,24 @@ Session-continuity note for picking this back up (by a future Claude session or 
 - `business/market_research_v1.md` §1 (spend/funding figures) and §4 (neurotech startup track records) —
   not started; §3 (competitive landscape) only has Ceribell and Merge Labs rows filled in.
 - Track B pass 2 (external research) for the 14 companies not yet well-informed by job_os data alone.
-- CHB-MIT dataset — not fetched. No pipeline code has touched real data yet.
+- CHB-MIT: one recording fetched and explored by hand (above). No *pipeline* code has touched real data yet.
 - `business/validation_protocol_v1.md`, `business/pricing_model_v1.md`, `business/milestone_review_v1.md` —
   not started (Phase 3/4 in the kickoff plan).
 
 ## Immediate next steps (pick one, or say what you want instead)
 
-1. **Track B pass 2** — external research (engineering blogs, talks, public statements) on the 14 companies
-   job_os's data didn't inform, starting with Ceribell and Merge Labs since those already have the strongest
-   base to build on.
-2. **Track A** — state-of-science literature review (EEG classification benchmarks, surrogate-data methods,
-   artifact/noise literature, explainability literature, EEG graph/GNN literature) — this is what unblocks
-   turning `mechanism_aware_interpretation_rubric.md` from provisional to grounded.
-3. **CHB-MIT fetch + smoke test wiring** — start filling in the `src/core/*.py` stubs against real data.
-4. **Informational interviews** — you have 18 real contacts and 2 drafted Merge Labs applications; the
-   remaining bp_v0.md action item is actually reaching out, which is on you, not something I can do on your
-   behalf.
+1. **ROADMAP Phase 1, item 1 (recommended):** implement `src/core/signal_ingest.py` (`load_eeg_recording()` +
+   epoching helper, window length as config) with a synthetic smoke test. This starts the engineering critical path.
+2. **Track A**: state-of-science literature review. It unblocks moving
+   `mechanism_aware_interpretation_rubric.md` out of provisional status, and runs in parallel with Phases 1–3.
+3. **Track B pass 2**: external research on the 14 companies job_os's data didn't inform (Ceribell, Merge Labs first).
+4. **Informational interviews**: 18 real contacts and 2 drafted Merge Labs applications. This one is on Ricardo.
 
-## Open decisions still waiting on you (from the original kickoff plan, unresolved)
+## Open decisions still waiting on you
 
-- GitHub remote name/creation for Riddler — holding until you say go.
+- Python version: `.venv` is 3.14 vs CLAUDE.md's 3.11 (fixing mamba needs `mamba clean -a`, which affects other envs).
+- Delete the merged `roadmap-and-first-data` branch (local + remote)?
+
 - Whether "Riddler" stays an internal codename or becomes customer-facing (like "Talus" is for GeoBind).
 - Whether to prioritize the Merge Labs applications (now that they're drafted) over the rest of the Riddler
   research plan, given the strategic overlap you flagged — your call on sequencing.

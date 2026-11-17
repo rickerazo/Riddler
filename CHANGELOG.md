@@ -2,6 +2,16 @@
 
 All notable changes to Riddler are recorded here, most recent first.
 
+## 2026-11-17: Turn protocol added; HANDOFF refreshed
+
+- `CLAUDE.md`: new "Turn protocol" section (user-set). Every turn ends with HANDOFF + CHANGELOG updated, a
+  commit, a push to `origin/master`, and a suggested next prompt.
+- `HANDOFF.md`: rewritten header and status for 2026-11-17. Fixed stale claims ("no GitHub remote yet",
+  "CHB-MIT not fetched"); next steps now point at ROADMAP Phase 1; added open decisions (Python version,
+  deleting the merged `roadmap-and-first-data` branch).
+- Earlier the same day: merged `roadmap-and-first-data` into `master` (fast-forward, `3dac7d9`) and pushed.
+  `outputs/exploration/` is now tracked so the remote is standalone.
+
 ## 2026-11-17: First real data explored; implementation roadmap added
 
 - Downloaded one CHB-MIT recording (`chb01_03.edf` + `chb01-summary.txt`, PhysioNet, public) to

@@ -60,6 +60,23 @@ Recording type is inferred by a `detect_recording_type()` router in `src/core/`,
   mechanism-classification call changed run-to-run; WARN = a raw artifact hash drifted but downstream
   conclusions didn't).
 
+## Turn protocol (every turn, no exceptions)
+
+Set by the user 2026-11-17. Every turn that changes the repo must be standalone and end with all of:
+
+1. **Update `HANDOFF.md`**: refresh the date, "Where things actually stand", and "Immediate next steps" so a
+   cold-start session (or Ricardo) can resume from it alone. Fix stale statements; don't just append.
+2. **Update `CHANGELOG.md`**: a new dated entry at the top (most recent first) recording what changed, what was
+   verified (actual commands/results), and anything flagged as provisional or undecided.
+3. **Commit and push to `origin/master`.** The remote is meant to be standalone while the proof of concept is
+   developed, so work lands on `master`, not on side branches. Never commit gitignored material (`business/`,
+   `data/raw/`, `outputs/contacts/`).
+4. **Close with a suggested next prompt**: a ready-to-paste prompt for the next step, normally the next
+   unchecked item in `ROADMAP.md`'s current phase.
+
+This sits on top of the "Definition of done" below and doesn't replace it. If a step can't be completed (e.g. the push
+fails), say so explicitly in the reply and in `HANDOFF.md` rather than skipping it silently.
+
 ## Definition of done for any task
 
 1. Name the governing source-of-truth doc (`ARCHITECTURE.md` for the core/module boundary,
