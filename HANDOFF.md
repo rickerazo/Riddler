@@ -68,6 +68,7 @@ Session-continuity note for picking this back up (by a future Claude session or 
 
 | What | Where |
 |---|---|
+| Implementation roadmap (phases + exit gates) | `Riddler/ROADMAP.md` |
 | Kickoff plan (full phased plan) | `/Users/rick/.claude/plans/recursive-soaring-bengio.md` |
 | Architecture / non-negotiables | `Riddler/CLAUDE.md`, `Riddler/ARCHITECTURE.md` |
 | Chronological log | `Riddler/CHANGELOG.md` |

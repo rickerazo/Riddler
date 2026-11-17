@@ -11,7 +11,8 @@ full pipeline-stage mapping ported from GeoBind, and `mechanism_aware_interpreta
 ## Status
 
 Scaffold stage. First modality: seizure detection on the CHB-MIT Scalp EEG Database. No pipeline code is wired
-to real data yet — see `business/bp_v0.md`'s milestone table for the current sequencing.
+to real data yet — see `business/bp_v0.md`'s milestone table for the current sequencing, and `ROADMAP.md` for the phased
+implementation plan (with exit gates and the planned computer-simulation benchmark).
 
 ## Environment
 

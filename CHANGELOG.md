@@ -2,6 +2,20 @@
 
 All notable changes to Riddler are recorded here, most recent first.
 
+## 2026-11-17: First real data explored; implementation roadmap added
+
+- Downloaded one CHB-MIT recording (`chb01_03.edf` + `chb01-summary.txt`, PhysioNet, public) to
+  `data/raw/chbmit/chb01/` (gitignored). Seizure annotated at 2996–3036 s.
+- Exploration-only figures/scripts in `outputs/exploration/` (no pipeline code touched): control-vs-seizure
+  traces, a channel×band power-change heatmap (right temporal F8-T8 / T8-P8 / FT10-T8 / FT9-FT10 lead), and a
+  perturbation demo on F8-T8 delta. Amplitude ×0.5 → delta power ratio 0.249; phase scramble → 1.035
+  (power preserved, waveform destroyed). Band edges and the 0.5 factor are illustrative, not calibrated.
+- Noted the data quirk: CHB-MIT lists `T8-P8` twice (MNE renames the copies `-0`/`-1`).
+- Environment: `mamba create` failed on a corrupted package cache (not cleaned; it affects other envs).
+  A project-local `.venv/` with Python 3.14 + MNE 1.13 is used instead. This deviates from CLAUDE.md's 3.11 and is flagged.
+- Added `ROADMAP.md`: Phases 1–5 with exit gates. A computer-simulation layer (Epileptor) is scheduled for Phase 4
+  as the ground-truth benchmark, with a pre-registered go/no-go against SHAP/occlusion.
+
 ## 2026-08-26 — Contacts matched; Merge Labs application materials drafted (job_os)
 
 - `src/contacts/neurotech_contact_matching.py` run for real: 18 LinkedIn connections matched across 5 of the
