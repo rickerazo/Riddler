@@ -13,9 +13,11 @@ check_metrics_shared() against a planted mechanism; stage 7 (src/core/perturbati
 the 4 provisional perturbation classes, seeded, quantize-on-persist) is checked by
 check_perturbation_execution() on the same planted-delta generator; stage 9
 (src/core/compare.py: signed deltas + baseline-normalized disruption, adjacent-band spillover as a
-separate off-target column) is checked by check_compare(). Every other stage (hotspot_detection.py,
-the perturbation_design.py table builder, interpret_mechanism_profiles.py) is still a stub that
-raises NotImplementedError; the test stops cleanly after stage 9. Stages are filled in
+separate off-target column) is checked by check_compare(); stage 4 (src/core/hotspot_detection.py:
+Cohen's-d ranking with PROVISIONAL weights + cross-shaped neighborhood exclusion, no cutoff) is
+checked by check_hotspot_detection(). Every other stage (the perturbation_design.py table builder,
+interpret_mechanism_profiles.py) is still a stub that raises NotImplementedError; the test stops
+cleanly after those checks. Stages are filled in
 incrementally in ROADMAP.md Phase 1 order.
 """
 
@@ -417,8 +419,9 @@ def check_compare(sampling_rate_hz: float = 256.0) -> None:
 
     Asserts: attenuation's largest normalized disruption is at (C2, delta); phase scramble leaves
     the target near zero; adjacent-band (C2, theta) Hann-leakage spillover is reported in its own
-    column, not in the target score; off-target channels / far bands are exactly 0; the output is
-    deterministic; and mismatched features are refused.
+    column, not in the target score; off-target channels are exactly 0 and same-channel far bands
+    see only rfft/irfft round-off (not exactly 0); the output is deterministic; and mismatched
+    features are refused.
     """
     import dataclasses
 
@@ -522,15 +525,141 @@ def check_compare(sampling_rate_hz: float = 256.0) -> None:
           f"MAD -> attenuation {mad.target_disruption_score_normalized:.2f}")
 
 
+def check_hotspot_detection(sampling_rate_hz: float = 256.0) -> None:
+    """Stage 4 check on the planted-delta generator.
+
+    Asserts: (C2, delta) is rank 1 with the expected sign; the effect size matches stage 3's d; every
+    unit is accounted for (selected / suppressed / degenerate) with no cutoff applied; the ranking is
+    bit-identical on rerun; neighborhood exclusion removes exactly the spectral (+ spatial, when an
+    adjacency is supplied) neighbors of a selected unit, and does so even when a neighbor outranks a
+    non-neighbor; degenerate units are listed, not ranked; bad inputs are refused.
+    """
+    import dataclasses
+
+    from src.core.compare import adjacent_bands
+    from src.core.hotspot_detection import (
+        PROVISIONAL_RANKING_WEIGHTS,
+        STATUS_SELECTED,
+        NeighborhoodConfig,
+        RankingWeights,
+        rank_hotspots,
+    )
+
+    sf = sampling_rate_hz
+    names = ["C0", "C1", "C2", "C3"]
+    data, labels = make_planted_delta_recording(n_channels=4, planted_channel=2, sampling_rate_hz=sf)
+    ep = epoch_recording(recording_from_array(data, sf, names), EpochConfig(window_s=2.0))
+    bands = BandConfig()
+    feats = compute_epoch_features(ep, bands)
+    n_units = len(names) * len(bands.names)
+    ci, bi = feats.unit_index("C2", "delta")
+
+    # (a) default config: spectral exclusion only (core knows no montage)
+    r = rank_hotspots(feats, labels, positive_label=1)
+    assert (r.top.channel, r.top.band, r.top.rank) == ("C2", "delta", 1), r.top
+    assert r.top.effect_size_signed > 0 and r.reference_label == 0
+    d_ref = _cohens_d(feats.log_band_power[labels == 0], feats.log_band_power[labels == 1])
+    assert np.allclose(r.effect_size_log_band_power, d_ref, rtol=1e-12)
+    assert r.weights.provisional and r.neighborhood.provisional
+    assert r.weights.as_dict() == PROVISIONAL_RANKING_WEIGHTS
+    # no cutoff: every unit lands in exactly one bucket; nothing is dropped for being "too small"
+    assert len(r.selected) + len(r.suppressed) + len(r.degenerate_units) == n_units
+    assert not r.degenerate_units
+    assert [u.rank for u in r.selected] == list(range(1, len(r.selected) + 1))
+    scores = [u.rank_score for u in r.selected]
+    assert scores == sorted(scores, reverse=True)
+    # spectral neighbor of the top unit (C2, theta) is suppressed by it; nothing else is
+    sup = {(u.channel, u.band): u.suppressed_by for u in r.suppressed}
+    assert sup.get(("C2", "theta")) == ("C2", "delta"), sup
+    # any suppressed unit is a 1-hop band neighbor, same channel, of a selected unit that outranks it
+    sel_rank = {(u.channel, u.band): u.rank_score for u in r.selected}
+    for u in r.suppressed:
+        sch, sbd = u.suppressed_by
+        assert sch == u.channel and u.band in adjacent_bands(bands, sbd)
+        assert sel_rank[u.suppressed_by] >= u.rank_score
+
+    # (b) determinism: bit-identical arrays, identical canonical rows
+    again = rank_hotspots(feats, labels, positive_label=1)
+    assert np.array_equal(again.rank_score, r.rank_score) and again.to_rows() == r.to_rows()
+    assert [(u.channel, u.band) for u in again.selected] == [(u.channel, u.band) for u in r.selected]
+
+    # (c) radius 0 on both axes -> no exclusion: selected == plain descending |d| sort
+    r0 = rank_hotspots(feats, labels, 1, neighborhood=NeighborhoodConfig(0, 0))
+    assert not r0.suppressed and len(r0.selected) == n_units
+    flat_order = sorted(((c, b) for c in range(len(names)) for b in range(len(bands.names))),
+                        key=lambda u: (-abs(d_ref[u]), u[0], u[1]))
+    assert [(u.channel_index, u.band_index) for u in r0.selected] == flat_order
+
+    # (d) spatial exclusion with a caller-supplied (modality-owned) chain C0-C1-C2-C3
+    chain = {"C0": ["C1"], "C1": ["C2"], "C2": ["C3"]}
+    rs = rank_hotspots(feats, labels, 1, neighborhood=NeighborhoodConfig(channel_adjacency=chain))
+    sup_s = {(u.channel, u.band): u.suppressed_by for u in rs.suppressed}
+    for nb in [("C2", "theta"), ("C1", "delta"), ("C3", "delta")]:
+        assert sup_s.get(nb) == ("C2", "delta"), (nb, sup_s)
+    assert ("C0", "delta") not in sup_s or sup_s[("C0", "delta")] != ("C2", "delta")  # 2 hops away
+    assert ("C1", "theta") not in sup_s or sup_s[("C1", "theta")] != ("C2", "delta")  # diagonal: not a neighbor
+
+    # (e) exclusion bites when a neighbor outranks a non-neighbor: add a class shift to (C2, theta)
+    #     (~6 SD, smaller than the ~18 SD delta plant) and a smaller one (~3 SD) to (C0, beta)
+    lbp = feats.log_band_power.copy()
+    th, be = bands.names.index("theta"), bands.names.index("beta")
+    lbp[labels == 1, ci, th] += 6.0 * lbp[:, ci, th].std(ddof=1)
+    lbp[labels == 1, 0, be] += 3.0 * lbp[:, 0, be].std(ddof=1)
+    f2 = dataclasses.replace(feats, log_band_power=lbp)
+    raw = rank_hotspots(f2, labels, 1, neighborhood=NeighborhoodConfig(0, 0))
+    assert [(u.channel, u.band) for u in raw.selected[:3]] == [("C2", "delta"), ("C2", "theta"), ("C0", "beta")]
+    ex = rank_hotspots(f2, labels, 1)
+    assert [(u.channel, u.band) for u in ex.selected[:2]] == [("C2", "delta"), ("C0", "beta")]
+    assert {(u.channel, u.band): u.suppressed_by for u in ex.suppressed}[("C2", "theta")] == ("C2", "delta")
+
+    # (f) degenerate: a flat channel has zero pooled SD -> NaN, listed, not ranked; no epsilon floor
+    flat = dataclasses.replace(feats, log_band_power=feats.log_band_power.copy())
+    flat.log_band_power[:, 0, :] = -30.0
+    rf = rank_hotspots(flat, labels, 1)
+    assert sorted(rf.degenerate_units) == sorted(("C0", b) for b in bands.names)
+    assert all(row["status"] != STATUS_SELECTED for row in rf.to_rows() if row["channel"] == "C0")
+    assert rf.top.channel == "C2" and rf.top.band == "delta"
+
+    # (g) refusals: wrong label count, >2 classes, unknown positive label, unknown adjacency channel,
+    #     all-zero weights, negative radius
+    bad_calls = [
+        lambda: rank_hotspots(feats, labels[:-1], 1),
+        lambda: rank_hotspots(feats, np.arange(len(labels)) % 3, 1),
+        lambda: rank_hotspots(feats, labels, 5),
+        lambda: rank_hotspots(feats, labels, 1, neighborhood=NeighborhoodConfig(channel_adjacency={"Cz": ["C0"]})),
+        lambda: RankingWeights(0.0, 0.0),
+        lambda: NeighborhoodConfig(spectral_radius_bands=-1),
+    ]
+    for i, call in enumerate(bad_calls):
+        try:
+            call()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"bad input #{i} was not refused")
+
+    top5 = ", ".join(f"{u.rank}:({u.channel},{u.band}) d={u.effect_size_signed:+.2f}" for u in r.selected[:5])
+    print(f"[smoke] hotspots: weights PROVISIONAL {r.weights.as_dict()}, spectral radius "
+          f"{r.neighborhood.spectral_radius_bands}, no spatial adjacency in core; top 5 of "
+          f"{len(r.selected)} selected: {top5}")
+    print(f"[smoke] hotspots: suppressed {sorted(sup.items())}; rerun bit-identical; no cutoff "
+          f"({len(r.selected)} selected + {len(r.suppressed)} suppressed = {n_units} units)")
+    print(f"[smoke] hotspots: with chain adjacency, (C2,delta) suppresses "
+          f"{sorted(k for k, v in sup_s.items() if v == ('C2', 'delta'))}; planted (C2,theta) +6 SD is "
+          f"raw rank 2 but excluded -> rank 2 becomes {ex.selected[1].channel, ex.selected[1].band}")
+
+
+
 def main() -> None:
     check_signal_ingest()
     check_metrics_shared()
     check_perturbation_execution()
     check_compare()
+    check_hotspot_detection()
     epoch = make_synthetic_epoch()
     print(f"[smoke] synthetic epoch shape: {epoch.shape}")
     print(
-        "[smoke] STOPPING HERE — remaining stages (hotspot ranking, perturbation design table, "
+        "[smoke] STOPPING HERE — remaining stages (perturbation design table, "
         "interpretation) are not yet implemented. See src/core/*.py TODOs and "
         "business/bp_v0.md's milestone table."
     )

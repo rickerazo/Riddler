@@ -2,6 +2,49 @@
 
 All notable changes to Riddler are recorded here, most recent first.
 
+## 2026-11-17: ROADMAP Phase 1 item 5, `hotspot_detection.py` implemented
+
+Governing doc: `ARCHITECTURE.md` stage 4 (channel×band ranking by class-discriminative signal + spatial/spectral
+neighborhood exclusion; core must not encode a montage).
+
+- `src/core/hotspot_detection.py`: replaced the stub.
+  - `rank_hotspots(features, labels, positive_label, weights, neighborhood)` → `HotspotRanking`.
+    Exactly two classes; `positive_label` is explicit (no silent default).
+  - Effect size: Cohen's d (pooled SD, ddof=1 per class) per unit for log band power and per channel for line
+    length. The signed d is kept; the score uses |d|.
+  - Score = Σ weight·|d| over nonzero-weight components (`RankingWeights`, the `DEFAULT_BINDING_WEIGHTS` analog).
+  - Neighborhood exclusion: greedy in descending score; a selected unit suppresses its "cross" neighbors:
+    same channel within `spectral_radius_bands` hops of band adjacency (from BandConfig edges via
+    `compare.adjacent_bands`), and same band within `spatial_radius_hops` of a **caller-supplied**
+    `channel_adjacency`. Diagonals are not neighbors.
+  - Ties broken by (channel index, band index). `to_rows()` gives canonical rows with status/rank/suppressed_by.
+  - `HotspotUnit` keeps its original fields (`channel`, `band`, `rank_score`); new fields are additive.
+- **Provisional, flagged in code (`PROVISIONAL_*`, `provisional=True` on both configs) and here:**
+  - Weights `log_band_power 1.0, line_length 0.0`. With line length off, the ranking is pure |d|; the 1.0 only
+    sets the sign. A nonzero line-length weight would be undocumented, so it is wired in but off.
+  - Radii = 1 hop (smallest non-trivial; not from literature). Cross vs box shape and d vs Hedges' g are open.
+  - No spatial exclusion by default: channel geometry belongs to the modality module (Phase 2, CHB-MIT bipolar chains).
+  - **No threshold, cutoff or top-k was introduced.** Every unit is selected, suppressed, or degenerate
+    (zero pooled SD → NaN, listed, no epsilon). How many selected units feed the perturbation panel is still open.
+- `src/run_pipeline_smoke_test.py`: new `check_hotspot_detection()`; `check_compare()` docstring fixed
+  ("far bands are exactly 0" → other channels exactly 0, same-channel far bands round-off only); module docstring
+  and stop message updated.
+- `ROADMAP.md`: item 5 ticked; ranking weights/radii added to the provisional-values row.
+- No shipped runner or schema touched: the stub was `(*args, **kwargs)` raising `NotImplementedError` and nothing called it.
+
+Verified (`.venv/bin/python -m src.run_pipeline_smoke_test`, exit 0, all assertions pass), planted C2-delta:
+
+- (C2, delta) is rank 1, d = +18.19; d matches stage 3's Cohen's d (rtol 1e-12).
+- Default config: 9 selected + 11 suppressed = 20 units; (C2, theta) suppressed by (C2, delta).
+- Rerun: bit-identical `rank_score`, identical `to_rows()` and order.
+- Radius 0 → no suppression; order equals a plain descending-|d| sort.
+- With a C0–C1–C2–C3 chain adjacency, (C2, delta) suppresses exactly (C1, delta), (C3, delta), (C2, theta).
+- Exclusion bites: with (C2, theta) shifted +6 SD and (C0, beta) +3 SD, raw rank 2 is (C2, theta); with exclusion,
+  rank 2 becomes (C0, beta).
+- Flat channel → 5 degenerate units, not ranked; bad labels / unknown adjacency channel / zero weights / negative radius refused.
+- **Flag:** ranks 2–9 on the planted data are noise (|d| ≤ 0.57). Without a cutoff they still get ranks; deciding
+  how many to perturb (or a grounded significance criterion) is a Phase 3 / Track A decision, not made here.
+
 ## 2026-11-17: ROADMAP Phase 1 item 4, `compare.py` implemented
 
 Governing docs: `ARCHITECTURE.md` stage 9 (baseline-normalized signed deltas, normalize from day 1) and

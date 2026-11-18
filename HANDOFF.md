@@ -11,6 +11,20 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 ## Where things actually stand
 
 **Latest (2026-11-17):**
+- **ROADMAP Phase 1 item 5 done:** `src/core/hotspot_detection.py` is implemented.
+  - `rank_hotspots(features, labels, positive_label, weights, neighborhood)` → `HotspotRanking`. Score per unit =
+    Σ weight·|Cohen's d| (pooled SD, ddof=1); signed d kept as a column.
+  - `RankingWeights` is **PROVISIONAL**: `log_band_power 1.0, line_length 0.0`, so the ranking is currently pure
+    |d| of log band power. Line length is wired in but off (no documented weighting).
+  - Greedy neighborhood exclusion, "cross" shape, radius 1 hop (**PROVISIONAL**): adjacent band on the same channel
+    (from band edges), and the same band on neighbor channels **only if the caller passes `channel_adjacency`**.
+    The core knows no montage, so the CHB-MIT module must supply bipolar-chain adjacency in Phase 2.
+  - **No cutoff/top-k**: every unit is selected, suppressed (with `suppressed_by`) or degenerate (NaN).
+  - Smoke: (C2, delta) rank 1 at d = +18.19; rerun bit-identical; with chain adjacency it suppresses exactly
+    (C1, delta), (C3, delta), (C2, theta); a planted +6 SD (C2, theta) is raw rank 2 but excluded.
+  - **Flag:** ranks 2–9 on the planted data are noise (|d| ≤ 0.57). How many selected hotspots feed the
+    perturbation panel is undecided; it's a caller/Phase 3 decision, not a threshold in the core.
+  - Also fixed `check_compare`'s docstring: far bands see round-off only, not exactly 0.
 - **ROADMAP Phase 1 item 4 done:** `src/core/compare.py` is implemented.
   - `compute_signed_deltas(baseline, perturbed)` returns per-epoch `perturbed − baseline` for log band power and line length.
     It refuses mismatched epochs, channels, bands or spectral configs. The sign is the feature's own direction; it is
@@ -77,7 +91,7 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
   benchmark with a pre-registered go/no-go against SHAP/occlusion.
 - Environment: project-local `.venv/` (Python 3.14, MNE 1.13) because the mamba package cache is corrupted.
   This deviates from CLAUDE.md's 3.11; still an open decision for Ricardo.
-- **Still true:** every `src/core/*.py` stage other than `signal_ingest.py`, `metrics_shared.py`, `perturbation_execution.py` and `compare.py` is a stub, and there is no seizure detector yet.
+- **Still true:** every `src/core/*.py` stage other than `signal_ingest.py`, `metrics_shared.py`, `perturbation_execution.py`, `compare.py` and `hotspot_detection.py` is a stub, and there is no seizure detector yet.
 
 **Earlier work (2026-08-26), still accurate unless noted:**
 **Done and real** (not placeholder):
@@ -120,9 +134,10 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 
 ## Immediate next steps (pick one, or say what you want instead)
 
-1. **ROADMAP Phase 1, item 5 (recommended):** implement `src/core/hotspot_detection.py`. Rank channel×band
-   units by class-discriminative effect size, with weights as a named config, plus spatial/spectral neighborhood
-   exclusion. It should recover (C2, delta) as rank 1 on the planted generator.
+1. **ROADMAP Phase 1, item 6 (recommended):** implement `src/core/interpret_mechanism_profiles.py`, the rule
+   cascade per `mechanism_aware_interpretation_rubric.md`. `Thresholds` default to `None` and the engine refuses
+   to classify while any is `None`; the smoke test passes explicitly labeled `SMOKE_TEST_ONLY` thresholds. It must
+   also decide (and flag) how the separate adjacent-band spillover column enters a call, if at all.
 2. **Track A**: state-of-science literature review. It unblocks moving
    `mechanism_aware_interpretation_rubric.md` out of provisional status, and runs in parallel with Phases 1–3.
 3. **Track B pass 2**: external research on the 14 companies job_os's data didn't inform (Ceribell, Merge Labs first).

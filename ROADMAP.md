@@ -1,6 +1,6 @@
 # Riddler roadmap
 
-Status as of 2026-11-17: Phase 1 items 1–4 (`signal_ingest.py`, `metrics_shared.py`, `perturbation_execution.py`, `compare.py`) are done. Every other `src/core/*.py` stage is still
+Status as of 2026-11-17: Phase 1 items 1–5 (`signal_ingest.py`, `metrics_shared.py`, `perturbation_execution.py`, `compare.py`, `hotspot_detection.py`) are done. Every other `src/core/*.py` stage is still
 a documented stub, and **there is no seizure detector yet**, so there's no model for a perturbation to move. One real CHB-MIT recording
 (`chb01_03.edf`) has been explored by hand; see `outputs/exploration/`.
 
@@ -31,7 +31,10 @@ Implement in ARCHITECTURE.md stage order:
 4. ✅ (2026-11-17) `src/core/compare.py`: signed deltas plus the **baseline-normalized** disruption score only.
    Done: `|mean Δlog10P| / unit's own baseline SD` (ddof=1, all epochs passed in; **normalizer PROVISIONAL**).
    Adjacent-band Hann-leakage spillover is a separate off-target column, never folded into the target score.
-5. `src/core/hotspot_detection.py`: rank units by class-discriminative effect size; weights as a named config.
+5. ✅ (2026-11-17) `src/core/hotspot_detection.py`: rank units by class-discriminative effect size; weights as a named config.
+   Done: score = Σ weight·|Cohen's d| (`RankingWeights`, PROVISIONAL `log_band_power 1.0, line_length 0.0`), greedy
+   cross-shaped neighborhood exclusion (adjacent band via band edges; spatial only from a caller-supplied channel
+   adjacency, since the core knows no montage). **No cutoff / top-k**: every unit is selected, suppressed or degenerate.
 6. `src/core/interpret_mechanism_profiles.py`: rule cascade per the rubric. `Thresholds` default to `None` and the
    engine refuses to classify while any is `None`. The smoke test passes explicitly labeled
    `SMOKE_TEST_ONLY` thresholds that are never used on real data.
@@ -109,7 +112,7 @@ What to build:
 
 | Decision | Status |
 |---|---|
-| Epoch window length, band edges, Welch segment length, log floor, quantization precision, perturbation strengths, compare normalizer (SD vs MAD; all-epochs vs control-only spread) | Config params, provisional until Track A / real distributions |
+| Epoch window length, band edges, Welch segment length, log floor, quantization precision, perturbation strengths, compare normalizer (SD vs MAD; all-epochs vs control-only spread), hotspot ranking weights + neighborhood radii/shape + how many selected hotspots feed the panel | Config params, provisional until Track A / real distributions |
 | Python version | `.venv` runs 3.14; CLAUDE.md specifies 3.11. The mamba package cache is corrupted, and fixing it (`mamba clean -a`) affects other envs, so it's the user's call |
 | `outputs/exploration/` in git | Currently untracked; decide whether to gitignore |
 | Rubric amendment: calibrate `tau_*` on simulation ground truth | Decide at Phase 4 |
