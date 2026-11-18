@@ -1,6 +1,6 @@
 # Riddler roadmap
 
-Status as of 2026-11-17: Phase 1 items 1–3 (`signal_ingest.py`, `metrics_shared.py`, `perturbation_execution.py`) are done. Every other `src/core/*.py` stage is still
+Status as of 2026-11-17: Phase 1 items 1–4 (`signal_ingest.py`, `metrics_shared.py`, `perturbation_execution.py`, `compare.py`) are done. Every other `src/core/*.py` stage is still
 a documented stub, and **there is no seizure detector yet**, so there's no model for a perturbation to move. One real CHB-MIT recording
 (`chb01_03.edf`) has been explored by hand; see `outputs/exploration/`.
 
@@ -28,7 +28,9 @@ Implement in ARCHITECTURE.md stage order:
    temporal jitter, structured noise). Seeded; quantized on persist at an explicit, flagged precision.
    `channel_dropout` stays unbuilt (rubric open item). Done: in-band FFT-bin edits per (epoch, channel) row;
    persisted as int64 counts at a PROVISIONAL 1e-9 step (≈390× finer than CHB-MIT's 0.39 µV ADC step).
-4. `src/core/compare.py`: signed deltas plus the **baseline-normalized** disruption score only.
+4. ✅ (2026-11-17) `src/core/compare.py`: signed deltas plus the **baseline-normalized** disruption score only.
+   Done: `|mean Δlog10P| / unit's own baseline SD` (ddof=1, all epochs passed in; **normalizer PROVISIONAL**).
+   Adjacent-band Hann-leakage spillover is a separate off-target column, never folded into the target score.
 5. `src/core/hotspot_detection.py`: rank units by class-discriminative effect size; weights as a named config.
 6. `src/core/interpret_mechanism_profiles.py`: rule cascade per the rubric. `Thresholds` default to `None` and the
    engine refuses to classify while any is `None`. The smoke test passes explicitly labeled
@@ -107,7 +109,7 @@ What to build:
 
 | Decision | Status |
 |---|---|
-| Epoch window length, band edges, Welch segment length, log floor, quantization precision, perturbation strengths | Config params, provisional until Track A / real distributions |
+| Epoch window length, band edges, Welch segment length, log floor, quantization precision, perturbation strengths, compare normalizer (SD vs MAD; all-epochs vs control-only spread) | Config params, provisional until Track A / real distributions |
 | Python version | `.venv` runs 3.14; CLAUDE.md specifies 3.11. The mamba package cache is corrupted, and fixing it (`mamba clean -a`) affects other envs, so it's the user's call |
 | `outputs/exploration/` in git | Currently untracked; decide whether to gitignore |
 | Rubric amendment: calibrate `tau_*` on simulation ground truth | Decide at Phase 4 |

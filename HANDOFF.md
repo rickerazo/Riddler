@@ -11,6 +11,33 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 ## Where things actually stand
 
 **Latest (2026-11-17):**
+- **ROADMAP Phase 1 item 4 done:** `src/core/compare.py` is implemented.
+  - `compute_signed_deltas(baseline, perturbed)` returns per-epoch `perturbed − baseline` for log band power and line length.
+    It refuses mismatched epochs, channels, bands or spectral configs. The sign is the feature's own direction; it is
+    not re-oriented, because a power increase (noise) and a decrease (attenuation) are both disruptive.
+  - `compute_disruption_score_normalized(baseline, perturbed, target, normalizer, spread_epoch_mask, record)` →
+    `ComparisonResult`. Per unit: `normalized_delta = mean Δlog10P / that unit's baseline spread`, and
+    `disruption_score_normalized = |normalized_delta|`. This is the only score; there is no raw variant.
+  - Each unit gets a relation to the target: `target`, `adjacent_band_same_channel` (from band edges),
+    `other_band_same_channel` or `other_channel`. `summary()` keeps
+    `offtarget_adjacent_band_max_disruption_normalized` as its own column, never added to the target score.
+  - **Normalizer is PROVISIONAL**: SD (ddof=1) over all baseline epochs passed in; MAD is offered as an alternative.
+    The choice matters. On the planted data the C2-delta spread is 0.466 over all epochs, but 0.065 over control
+    epochs only, because the all-epochs SD contains the planted class difference.
+  - A zero-spread unit gives NaN and is listed in `degenerate_units`; no floor is invented.
+  - Composite weights are not introduced: there is one feature per unit, and line length stays out of the score.
+  Smoke test on planted C2-delta (default normalizer):
+
+  | Perturbation | Target score | Adjacent C2-theta spillover |
+  |---|---|---|
+  | attenuation | 1.290 (largest unit) | 0.019 |
+  | phase scramble | 0.084 | 0.306 |
+  | jitter | 0.001 | 0.261 |
+  | noise | 0.596 | **1.773** |
+
+  Other channels score exactly 0, same-channel far bands ≤ 4e-16, and reruns are bit-identical.
+  **Flag for stage 13:** under noise, spillover is about 3× the target score. That's why it has its own
+  column. How (or whether) spillover discounts a mechanism call is an interpretation-engine decision, still open.
 - **ROADMAP Phase 1 item 3 done:** `src/core/perturbation_execution.py` is implemented.
   `apply_perturbation(data, sfreq, spec, channel_indices, band_hz, seed, config)` edits only the target band's
   rfft bins on the target channel(s), per (epoch, channel) row. The 4 classes:
@@ -50,7 +77,7 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
   benchmark with a pre-registered go/no-go against SHAP/occlusion.
 - Environment: project-local `.venv/` (Python 3.14, MNE 1.13) because the mamba package cache is corrupted.
   This deviates from CLAUDE.md's 3.11; still an open decision for Ricardo.
-- **Still true:** every `src/core/*.py` stage other than `signal_ingest.py`, `metrics_shared.py` and `perturbation_execution.py` is a stub, and there is no seizure detector yet.
+- **Still true:** every `src/core/*.py` stage other than `signal_ingest.py`, `metrics_shared.py`, `perturbation_execution.py` and `compare.py` is a stub, and there is no seizure detector yet.
 
 **Earlier work (2026-08-26), still accurate unless noted:**
 **Done and real** (not placeholder):
@@ -93,9 +120,9 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 
 ## Immediate next steps (pick one, or say what you want instead)
 
-1. **ROADMAP Phase 1, item 4 (recommended):** implement `src/core/compare.py`. It needs signed baseline-vs-perturbed
-   feature deltas plus the **baseline-normalized** disruption score only. Decide explicitly how adjacent-band
-   Hann leakage (the C2-theta spillover above) is reported: as a separate off-target column, not folded into the target score.
+1. **ROADMAP Phase 1, item 5 (recommended):** implement `src/core/hotspot_detection.py`. Rank channel×band
+   units by class-discriminative effect size, with weights as a named config, plus spatial/spectral neighborhood
+   exclusion. It should recover (C2, delta) as rank 1 on the planted generator.
 2. **Track A**: state-of-science literature review. It unblocks moving
    `mechanism_aware_interpretation_rubric.md` out of provisional status, and runs in parallel with Phases 1–3.
 3. **Track B pass 2**: external research on the 14 companies job_os's data didn't inform (Ceribell, Merge Labs first).

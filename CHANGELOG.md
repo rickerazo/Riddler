@@ -2,6 +2,63 @@
 
 All notable changes to Riddler are recorded here, most recent first.
 
+## 2026-11-17: ROADMAP Phase 1 item 4, `compare.py` implemented
+
+Governing docs: `ARCHITECTURE.md` stage 9 (baseline-normalized signed deltas, normalize from day 1) and
+`mechanism_aware_interpretation_rubric.md` ("Baseline-normalize before comparing across hotspots"; **provisional**).
+
+- `src/core/compare.py`: replaced the stubs.
+  - `compute_signed_deltas(baseline, perturbed)` → `SignedDeltas`: per-epoch `perturbed − baseline` for
+    `log_band_power` (epochs×channels×bands) and `line_length` (epochs×channels).
+    - It raises if the two `EpochFeatures` differ in channels, bands, band edges, spectral config, sampling rate,
+      window or `start_samples`.
+    - Sign = the feature's own direction. It is not re-oriented to "positive = disruptive", since both up and down moves in band power are disruptive.
+  - `compute_disruption_score_normalized(...)` → `ComparisonResult` with per-unit `delta_mean`, `delta_sd`,
+    `baseline_spread`, `normalized_delta` (signed) and `disruption_score_normalized = |mean Δ| / spread`.
+    This is the only score exposed; there is no un-normalized score.
+  - Off-target reporting: each unit carries a `relation` (`target` / `adjacent_band_same_channel` /
+    `other_band_same_channel` / `other_channel`). Band adjacency comes from shared BandConfig edges
+    (`adjacent_bands()`), not names or order, so it stays montage- and band-set-agnostic.
+    `summary()` reports `target_disruption_score_normalized` and, as separate keys,
+    `offtarget_adjacent_band_max_disruption_normalized` and `offtarget_other_max_disruption_normalized`.
+    Nothing sums them.
+  - `to_rows()`: canonical per-unit rows sorted by (channel index, band index), for later persistence and auditing.
+- **Provisional, flagged in code (`PROVISIONAL_NORMALIZER_*`) and here:**
+  - Normalizer = sample SD (ddof=1) of the unit's baseline log10 power over all epochs passed in.
+    Open sub-choices:
+    - SD vs MAD (`NormalizerConfig(method="mad")` is offered, uncalibrated);
+    - all-epochs vs a class subset (`spread_epoch_mask`);
+    - spread vs class-discriminative effect size as the "baseline engagement" normalizer.
+  - Zero spread → NaN plus `degenerate_units`. No epsilon floor was invented.
+  - No composite weights: log band power is the only per-unit feature. Line-length deltas are returned but not scored.
+  - No quantization here (nothing persisted). Feature-array precision is still open.
+- `src/run_pipeline_smoke_test.py`: new `check_compare()`.
+  - New constants: `SMOKE_TEST_ONLY_POWER_PRESERVED_MAX_NORM = 0.25` and `SMOKE_TEST_ONLY_ROUNDOFF_MAX_NORM = 1e-6`.
+  - The docstring and stop message now say the test stops after stage 9.
+- `ROADMAP.md`: item 4 ticked. The compare normalizer is added to the provisional-values row.
+- No shipped runner or schema touched. The stubs were `(*args, **kwargs)` and nothing called them.
+
+Verified (`.venv/bin/python -m src.run_pipeline_smoke_test`, exit 0, all assertions pass), planted C2-delta, seed 7:
+
+| Perturbation | Target score (signed) | Adjacent C2-theta spillover |
+|---|---|---|
+| attenuation | 1.290 (−1.290) | 0.019 |
+| phase scramble | 0.084 | 0.306 |
+| temporal jitter | 0.001 | 0.261 |
+| structured noise | 0.596 | 1.773 |
+
+- Attenuation's largest normalized disruption over all 20 units is at (C2, delta).
+- Other channels score exactly 0. Same-channel far bands max 3.6e-16 (round-off).
+- A rerun gives bit-identical arrays and identical `to_rows()` / `summary()`.
+- Mismatched epochs are refused.
+- Normalizer sensitivity (reported, not hidden):
+  - C2-delta spread is 0.466 over all epochs vs 0.065 over control epochs only.
+  - With the control-only spread, attenuation → 9.24 and phase scramble → 0.61. Phase scramble is then no longer
+    "near zero", so the "near zero" claim holds only under the default normalizer.
+  - With MAD, attenuation → 0.86.
+- **Flagged for stage 13:** under noise injection the adjacent-band spillover (1.77) exceeds the target score (0.60).
+  Whether spillover discounts a mechanism call is undecided interpretation logic.
+
 ## 2026-11-17: ROADMAP Phase 1 item 3, `perturbation_execution.py` implemented
 
 Governing docs: `ARCHITECTURE.md` stage 7 (deterministic, seeded, quantized on persist) and

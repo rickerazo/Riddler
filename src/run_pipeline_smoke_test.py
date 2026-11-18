@@ -11,10 +11,11 @@ channel handling, epoching) is checked by check_signal_ingest(); stage 3 (src/co
 log band power per channel x band, line length, class-averaged phenotypes) is checked by
 check_metrics_shared() against a planted mechanism; stage 7 (src/core/perturbation_execution.py:
 the 4 provisional perturbation classes, seeded, quantize-on-persist) is checked by
-check_perturbation_execution() on the same planted-delta generator. Every other stage
-(hotspot_detection.py, the perturbation_design.py table builder, compare.py,
-interpret_mechanism_profiles.py) is still a stub that raises NotImplementedError; the test stops
-cleanly after stage 7. Stages are filled in
+check_perturbation_execution() on the same planted-delta generator; stage 9
+(src/core/compare.py: signed deltas + baseline-normalized disruption, adjacent-band spillover as a
+separate off-target column) is checked by check_compare(). Every other stage (hotspot_detection.py,
+the perturbation_design.py table builder, interpret_mechanism_profiles.py) is still a stub that
+raises NotImplementedError; the test stops cleanly after stage 9. Stages are filled in
 incrementally in ROADMAP.md Phase 1 order.
 """
 
@@ -403,15 +404,134 @@ def check_perturbation_execution(sampling_rate_hz: float = 256.0) -> None:
           f"{digests[0][0][:12]}...); quantization step {step} (PROVISIONAL)")
 
 
+# SMOKE_TEST_ONLY bound for the stage-9 check: |normalized disruption| a power-preserving perturbation
+# may leave at the target unit (units of that unit's baseline SD) on synthetic data. Not an
+# interpretation threshold (no tau_* value) and never used on real data.
+SMOKE_TEST_ONLY_POWER_PRESERVED_MAX_NORM = 0.25
+# Float round-off bound for same-channel, non-adjacent bands (rfft -> irfft round trip).
+SMOKE_TEST_ONLY_ROUNDOFF_MAX_NORM = 1e-6
+
+
+def check_compare(sampling_rate_hz: float = 256.0) -> None:
+    """Stage 9 check on the planted-delta generator, perturbing (C2, delta) with the full panel.
+
+    Asserts: attenuation's largest normalized disruption is at (C2, delta); phase scramble leaves
+    the target near zero; adjacent-band (C2, theta) Hann-leakage spillover is reported in its own
+    column, not in the target score; off-target channels / far bands are exactly 0; the output is
+    deterministic; and mismatched features are refused.
+    """
+    import dataclasses
+
+    from src.core.compare import (
+        RELATION_ADJACENT,
+        RELATION_OTHER_CHANNEL,
+        RELATION_TARGET,
+        NormalizerConfig,
+        adjacent_bands,
+        compute_disruption_score_normalized,
+    )
+    from src.core.perturbation_design import CANDIDATE_PANEL, PerturbationClass
+    from src.core.perturbation_execution import apply_perturbation
+
+    sf = sampling_rate_hz
+    names = ["C0", "C1", "C2", "C3"]
+    data, labels = make_planted_delta_recording(n_channels=4, planted_channel=2, sampling_rate_hz=sf)
+    ep = epoch_recording(recording_from_array(data, sf, names), EpochConfig(window_s=2.0))
+    bands = BandConfig()
+    target = ("C2", "delta")
+    base = compute_epoch_features(ep, bands)
+    ci, bi = base.unit_index(*target)
+    th = bands.names.index("theta")
+    assert adjacent_bands(bands, "delta") == ["theta"]  # from band edges, not names/order
+    assert adjacent_bands(bands, "alpha") == ["theta", "beta"]
+
+    def run(spec, normalizer=None, mask=None):
+        res = apply_perturbation(ep.data, sf, spec, ci, bands.bands[target[1]], seed=7)
+        pert = compute_epoch_features(dataclasses.replace(ep, data=res.data), bands)
+        return compute_disruption_score_normalized(base, pert, target, normalizer, mask, record=res.record)
+
+    out = {spec.perturbation_class: run(spec) for spec in CANDIDATE_PANEL}
+    for pclass, c in out.items():
+        assert c.relation[ci, bi] == RELATION_TARGET and c.relation[ci, th] == RELATION_ADJACENT
+        assert c.target_disruption_score_normalized == c.disruption_score_normalized[ci, bi]
+        # in-band, single-channel perturbation: other channels exactly untouched; far bands on the
+        # target channel only see rfft/irfft round-off
+        assert np.all(c.disruption_score_normalized[c.relation == RELATION_OTHER_CHANNEL] == 0.0), pclass
+        assert c.offtarget_other_max_disruption_normalized < SMOKE_TEST_ONLY_ROUNDOFF_MAX_NORM, pclass
+        assert not c.degenerate_units
+        s = c.summary()
+        assert s["perturbation_class"] == pclass.value and s["normalizer_provisional"] is True
+        # the separate off-target column IS the adjacent unit, and is not folded into the target score
+        assert s["offtarget_adjacent_band_max_disruption_normalized"] == c.disruption_score_normalized[ci, th]
+        assert s["target_disruption_score_normalized"] == abs(c.delta_mean[ci, bi] / c.baseline_spread[ci, bi])
+
+    # (a) attenuation: largest normalized disruption anywhere is the target unit; direction negative
+    att = out[PerturbationClass.AMPLITUDE_ATTENUATION]
+    top = np.unravel_index(np.nanargmax(att.disruption_score_normalized), att.disruption_score_normalized.shape)
+    assert (names[top[0]], bands.names[top[1]]) == target, top
+    assert att.target_normalized_delta < 0
+    assert att.target_disruption_score_normalized > att.offtarget_adjacent_band_max_disruption_normalized
+
+    # (b) phase scramble: power-preserving, so the target score stays near zero
+    ps = out[PerturbationClass.PHASE_SCRAMBLE]
+    assert ps.target_disruption_score_normalized < SMOKE_TEST_ONLY_POWER_PRESERVED_MAX_NORM, ps.summary()
+    assert ps.target_disruption_score_normalized < att.target_disruption_score_normalized
+    jt = out[PerturbationClass.TEMPORAL_JITTER]
+    assert jt.target_disruption_score_normalized < SMOKE_TEST_ONLY_POWER_PRESERVED_MAX_NORM, jt.summary()
+
+    # (c) determinism: identical inputs -> bit-identical arrays and identical canonical rows
+    again = run(CANDIDATE_PANEL[0])
+    for name in ("delta_mean", "delta_sd", "baseline_spread", "normalized_delta", "disruption_score_normalized"):
+        assert np.array_equal(getattr(again, name), getattr(att, name), equal_nan=True), name
+    assert again.to_rows() == att.to_rows() and again.summary() == att.summary()
+    assert [(r["channel"], r["band"]) for r in att.to_rows()] == [(c, b) for c in names for b in bands.names]
+
+    # (d) refuse mismatched features (different epochs) rather than compare them
+    shifted = dataclasses.replace(base, start_samples=base.start_samples + 1)
+    try:
+        compute_disruption_score_normalized(base, shifted, target)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("features from different epochs were compared")
+
+    # (e) degenerate spread -> NaN + listed, never a made-up floor
+    flat = dataclasses.replace(base, log_band_power=base.log_band_power.copy())
+    flat.log_band_power[:, 0, :] = -30.0
+    c_flat = compute_disruption_score_normalized(flat, flat, target)
+    assert np.all(np.isnan(c_flat.normalized_delta[0])) and len(c_flat.degenerate_units) == len(bands.names)
+
+    # (f) normalizer sensitivity (PROVISIONAL choice): report, don't hide. Control-only spread excludes
+    #     the planted class difference, so the C2-delta SD is far smaller and every score scales up.
+    ctrl = run(CANDIDATE_PANEL[0], mask=labels == 0)
+    ps_ctrl = run(CANDIDATE_PANEL[1], mask=labels == 0)
+    mad = run(CANDIDATE_PANEL[0], normalizer=NormalizerConfig(method="mad"))
+
+    def fmt(c):
+        return (f"target {c.target_disruption_score_normalized:.3f} "
+                f"(signed {c.target_normalized_delta:+.3f}), adjacent-band spillover "
+                f"{c.offtarget_adjacent_band_max_disruption_normalized:.3f}")
+    for pclass, c in out.items():
+        print(f"[smoke] compare: {pclass.value:<27} on {target}: {fmt(c)}")
+    far = max(c.offtarget_other_max_disruption_normalized for c in out.values())
+    print(f"[smoke] compare: other channels exactly 0; same-channel far bands max {far:.1e} (round-off); "
+          f"output bit-identical on rerun")
+    print(f"[smoke] compare: normalizer is PROVISIONAL (std, ddof=1, all epochs): C2-delta spread "
+          f"{att.baseline_spread[ci, bi]:.3f}; control-only {ctrl.baseline_spread[ci, bi]:.3f} -> attenuation "
+          f"{ctrl.target_disruption_score_normalized:.2f}, phase scramble {ps_ctrl.target_disruption_score_normalized:.2f}; "
+          f"MAD -> attenuation {mad.target_disruption_score_normalized:.2f}")
+
+
 def main() -> None:
     check_signal_ingest()
     check_metrics_shared()
     check_perturbation_execution()
+    check_compare()
     epoch = make_synthetic_epoch()
     print(f"[smoke] synthetic epoch shape: {epoch.shape}")
     print(
         "[smoke] STOPPING HERE — remaining stages (hotspot ranking, perturbation design table, "
-        "comparison, interpretation) are not yet implemented. See src/core/*.py TODOs and "
+        "interpretation) are not yet implemented. See src/core/*.py TODOs and "
         "business/bp_v0.md's milestone table."
     )
 
