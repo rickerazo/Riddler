@@ -2,6 +2,44 @@
 
 All notable changes to Riddler are recorded here, most recent first.
 
+## 2026-11-17: ROADMAP Phase 1 item 1, `signal_ingest.py` implemented
+
+Governing doc: `ARCHITECTURE.md` stages 1–2 (core/module boundary). Implemented per `ROADMAP.md` Phase 1 item 1.
+
+- `src/core/signal_ingest.py`: replaced the stub with a working implementation.
+  - `load_eeg_recording(path, config)` reads via `mne.io.read_raw`, keeps EEG-typed channels, no filtering or
+    resampling, and returns an `EEGRecording` (`data` (n_channels, n_samples) float64 in volts, plus `meta`).
+    The stub's declared return type was `RecordingMeta`. Nothing called it, so this changes no shipped schema;
+    `RecordingMeta` keeps its original fields and gains `n_samples`, `duration_s` and `dropped_duplicate_channels`.
+  - `recording_from_array(...)` is the in-memory path. It shares the duplicate handling with the EDF path, so
+    the synthetic test runs the same code.
+  - Duplicate channel labels are handled generically, with no CHB-MIT names in core. A group is either a
+    verbatim-repeated label or MNE's `<base>-0..<base>-{n-1}` rename pattern when `<base>` is absent.
+    `IngestConfig.duplicate_policy`: `drop_identical` (default) keeps the first copy only if all copies are
+    bit-identical (exact equality, no tolerance) and raises otherwise. The other options are `error` and
+    `keep`. Dropped copies are recorded in `meta.dropped_duplicate_channels`.
+  - `epoch_recording(rec, EpochConfig, start_s, stop_s)` makes fixed windows with an optional hop and segment.
+    The trailing partial window is dropped, never padded. Window, hop and segment edges must be whole samples,
+    otherwise it raises. `start_samples` is the stable identity key for canonical serialization.
+  - `python -m src.core.signal_ingest <file>` prints a summary.
+- **Provisional:** `EpochConfig.window_s` defaults to `PROVISIONAL_WINDOW_S = 2.0` s. This is not grounded in a
+  cited source yet; override per call.
+- No quantization at ingest because nothing is persisted here. Quantize-on-persist still applies at stage 7.
+- `src/run_pipeline_smoke_test.py`: new `check_signal_ingest()` on synthetic data. It plants a duplicate pair
+  and checks: collapse; refusal of a non-identical duplicate; the `keep`/`error` policies; a lone `C3-1`-style
+  name left alone; epoch shapes, hops and segments; each epoch equal to its exact source slice; and refusal
+  of a non-integer-sample window. The downstream "STOPPING HERE" behavior is unchanged.
+
+Verified (`.venv`, Python 3.14, MNE 1.13.2):
+- `.venv/bin/python -m src.run_pipeline_smoke_test`: all stage-1 assertions pass, then the run stops as designed.
+- `.venv/bin/python -m src.core.signal_ingest data/raw/chbmit/chb01/chb01_03.edf`: 256 Hz, 22 channels
+  (23 in file; `T8-P8-1` dropped as an identical copy of `T8-P8`), 921600 samples = 3600.0 s, 1800 × 22 × 512 epochs.
+- Cross-check: the loaded array is bit-identical to MNE's raw minus the dropped copy. Epoching the annotated
+  seizure [2996, 3036) s gives 20 epochs, and epoch 0 equals the raw slice exactly.
+
+Not handled yet (Phase 2, modality module): CHB-MIT montage changes across files, and the placeholder `-`
+channels in some files. Groups of those would currently collapse to a single `-` channel if they are identical.
+
 ## 2026-11-17: Turn protocol added; HANDOFF refreshed
 
 - `CLAUDE.md`: new "Turn protocol" section (user-set). Every turn ends with HANDOFF + CHANGELOG updated, a

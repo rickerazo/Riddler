@@ -1,7 +1,7 @@
 # Riddler roadmap
 
-Status as of 2026-11-17: the scaffold exists. Every `src/core/*.py` stage is a documented stub, and **there is no
-seizure detector yet**, so there's no model for a perturbation to move. One real CHB-MIT recording
+Status as of 2026-11-17: Phase 1 item 1 (`signal_ingest.py`) is done. Every other `src/core/*.py` stage is still
+a documented stub, and **there is no seizure detector yet**, so there's no model for a perturbation to move. One real CHB-MIT recording
 (`chb01_03.edf`) has been explored by hand; see `outputs/exploration/`.
 
 Governing docs: `ARCHITECTURE.md` (stage order 1–17, core/module boundary) and
@@ -21,7 +21,7 @@ an answer key.
 
 Implement in ARCHITECTURE.md stage order:
 
-1. `src/core/signal_ingest.py`: `load_eeg_recording()` (MNE) plus an epoching helper. Window length is a config param.
+1. ✅ (2026-11-17) `src/core/signal_ingest.py`: `load_eeg_recording()` (MNE) plus an epoching helper. Window length is a config param.
 2. `src/core/metrics_shared.py`: log band power per channel×band (plus line length). Band edges are a config
    object, flagged provisional.
 3. `src/core/perturbation_execution.py`: the 4 provisional classes (amplitude attenuation, phase scramble,

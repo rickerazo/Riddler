@@ -11,6 +11,11 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 ## Where things actually stand
 
 **Latest (2026-11-17):**
+- **ROADMAP Phase 1 item 1 done:** `src/core/signal_ingest.py` is implemented. It has `load_eeg_recording()` via MNE,
+  `recording_from_array()`, generic duplicate-channel handling (the default drops bit-identical copies and
+  raises on non-identical ones), and `epoch_recording()`. Window length is a config param with a
+  **provisional** 2.0 s default. The synthetic check lives in `src/run_pipeline_smoke_test.py` and passes.
+  `chb01_03.edf` loads to 22 ch × 3600 s at 256 Hz (the duplicate `T8-P8` collapsed), bit-identical to MNE.
 - GitHub remote live: `origin` = `github.com:rickerazo/Riddler.git`; `master` is pushed and current.
   (An old side branch, `roadmap-and-first-data`, is fully merged and can be deleted.)
 - First real data: `data/raw/chbmit/chb01/chb01_03.edf` + `chb01-summary.txt` (gitignored; fetch steps in
@@ -22,7 +27,7 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
   benchmark with a pre-registered go/no-go against SHAP/occlusion.
 - Environment: project-local `.venv/` (Python 3.14, MNE 1.13) because the mamba package cache is corrupted.
   This deviates from CLAUDE.md's 3.11; still an open decision for Ricardo.
-- **Still true:** every `src/core/*.py` stage is a stub, and there is no seizure detector yet.
+- **Still true:** every `src/core/*.py` stage other than `signal_ingest.py` is a stub, and there is no seizure detector yet.
 
 **Earlier work (2026-08-26), still accurate unless noted:**
 **Done and real** (not placeholder):
@@ -58,14 +63,16 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 - `business/market_research_v1.md` §1 (spend/funding figures) and §4 (neurotech startup track records) —
   not started; §3 (competitive landscape) only has Ceribell and Merge Labs rows filled in.
 - Track B pass 2 (external research) for the 14 companies not yet well-informed by job_os data alone.
-- CHB-MIT: one recording fetched and explored by hand (above). No *pipeline* code has touched real data yet.
+- CHB-MIT: one recording fetched. Only the stage-1 ingest has touched it. Montage changes across files and the
+  `-` placeholder channels in some files are Phase 2 (modality-module) work, not handled yet.
 - `business/validation_protocol_v1.md`, `business/pricing_model_v1.md`, `business/milestone_review_v1.md` —
   not started (Phase 3/4 in the kickoff plan).
 
 ## Immediate next steps (pick one, or say what you want instead)
 
-1. **ROADMAP Phase 1, item 1 (recommended):** implement `src/core/signal_ingest.py` (`load_eeg_recording()` +
-   epoching helper, window length as config) with a synthetic smoke test. This starts the engineering critical path.
+1. **ROADMAP Phase 1, item 2 (recommended):** implement `src/core/metrics_shared.py`: log band power per
+   channel×band, plus line length, on `EpochedRecording`. Band edges go in a config object flagged provisional.
+   Extend the synthetic smoke test with a planted band-power difference.
 2. **Track A**: state-of-science literature review. It unblocks moving
    `mechanism_aware_interpretation_rubric.md` out of provisional status, and runs in parallel with Phases 1–3.
 3. **Track B pass 2**: external research on the 14 companies job_os's data didn't inform (Ceribell, Merge Labs first).
