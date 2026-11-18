@@ -2,6 +2,54 @@
 
 All notable changes to Riddler are recorded here, most recent first.
 
+## 2026-11-17: ROADMAP Phase 1 item 2, `metrics_shared.py` implemented
+
+Governing doc: `ARCHITECTURE.md` stages 3 and 8 (shared feature extraction, same code on baseline and
+perturbed signals). Implemented per `ROADMAP.md` Phase 1 item 2.
+
+- `src/core/metrics_shared.py`: replaced the stub.
+  - `compute_epoch_features(epoched, BandConfig, SpectralConfig)` → `EpochFeatures`. It holds `log_band_power`
+    (n_epochs, n_channels, n_bands) and `line_length` (n_epochs, n_channels), plus `start_samples`, channel and
+    band names, and the configs used.
+  - Log band power: a one-sided density PSD (Hann window, `scipy.signal.welch`) integrated over the band's
+    bins, then `log10`. Bands are half-open `[lo, hi)`. Extraction raises on any band with no frequency bin or
+    above Nyquist instead of returning an empty or truncated band.
+  - Line length is `sum(|diff|)` over the epoch (Esteller et al. 2001). It is not length-normalized, so it is
+    only comparable within one window length.
+  - `extract_baseline_phenotypes(features, labels)` → `ClassPhenotypes`: per-class mean and SD (ddof=1) per
+    unit. It only averages. Effect-size ranking stays in stage 4 (`hotspot_detection.py`).
+    The stub signature was `(*args, **kwargs)` and nothing called it, so no shipped schema changed.
+- **Provisional, not cited or calibrated:**
+  - `PROVISIONAL_BANDS_HZ` = delta 0.5–4, theta 4–8, alpha 8–13, beta 13–30, gamma 30–45 Hz. This is the
+    conventional split, but edges vary in the literature. Track A must ground them.
+  - `SpectralConfig.welch_segment_s = None`: a single whole-epoch periodogram, which gives 0.5 Hz resolution at 2 s.
+  - `PROVISIONAL_LOG_FLOOR = 1e-30`: a numerical guard against `log10(0)` on flat channels, not a physiological value.
+- No quantization, because nothing is persisted here. The quantize-on-persist precision is still undecided.
+- `src/run_pipeline_smoke_test.py`: new `check_metrics_shared()` and generator `make_planted_delta_recording()`.
+  The generator makes 4 channels × 80 epochs of 2 s: white noise plus a 1.5–2.5 Hz tone everywhere, with the
+  tone ×3 on C2 in the "seizure" half only. The check asserts:
+  - analytic scaling: a 10 Hz sine with a=3 gives alpha power 4.5 = a²/2, with ~0 in the other bands;
+  - a ramp's line length is exact;
+  - a flat channel stays finite;
+  - empty and supra-Nyquist bands are refused;
+  - the planted unit (C2, delta) has Cohen's d > 5 and every other unit |d| < 1;
+  - bit-identical features on rerun.
+  The 5 / 1 cut-offs are named `SMOKE_TEST_ONLY_*` and are not thresholds for real data.
+- **Finding, by design rather than a bug:** line length does *not* pick up the planted slow-delta change
+  (d = −0.37 on C2). Differencing weights high frequencies, so a 2 Hz change sits under the white-noise floor.
+  My first draft asserted that it would, and that assertion failed. The test now asserts that line length is
+  blind to the delta plant. A second plant, broadband ×2 on C2, is detected by line length on C2 only
+  (d = 16.6, others ≤ 0.18). This matters later: line length can't serve as the channel×band unit feature for
+  slow-wave mechanisms.
+
+Verified (`.venv`, Python 3.14, SciPy 1.18.1):
+- `.venv/bin/python -m src.run_pipeline_smoke_test`: all stage-1 and stage-3 assertions pass. The planted
+  (C2, delta) unit has d = 18.19 and the max |d| elsewhere is 0.57. The run then stops as designed.
+- On real data, `chb01_03.edf` gives features of shape (1800, 22, 5) and (1800, 22), all finite. Seizure
+  epochs [2996, 3036) s (20) vs the rest (1780): the largest class-mean log-power increase is T8-P8 gamma
+  (+2.15 log10). This is a plumbing check only and not a finding. It may be muscle artifact; nothing is
+  interpreted from it.
+
 ## 2026-11-17: ROADMAP Phase 1 item 1, `signal_ingest.py` implemented
 
 Governing doc: `ARCHITECTURE.md` stages 1–2 (core/module boundary). Implemented per `ROADMAP.md` Phase 1 item 1.

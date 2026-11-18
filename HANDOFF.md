@@ -11,6 +11,13 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 ## Where things actually stand
 
 **Latest (2026-11-17):**
+- **ROADMAP Phase 1 item 2 done:** `src/core/metrics_shared.py` is implemented. `compute_epoch_features()` gives
+  log10 band power per channel×band (Hann PSD integrated per band) and line length per channel.
+  `extract_baseline_phenotypes()` gives per-class means and SDs. Band edges (delta 0.5–4 … gamma 30–45 Hz),
+  the Welch segment and the log floor are all **provisional** config. The smoke test plants delta ×3 on one
+  channel and recovers exactly that channel×band unit (d = 18.2; every other unit |d| < 0.6). Line length is
+  blind to that slow-delta plant, which is a documented property of the feature rather than a bug; it does
+  catch a broadband plant. The features also run on `chb01_03.edf`, giving (1800, 22, 5).
 - **ROADMAP Phase 1 item 1 done:** `src/core/signal_ingest.py` is implemented. It has `load_eeg_recording()` via MNE,
   `recording_from_array()`, generic duplicate-channel handling (the default drops bit-identical copies and
   raises on non-identical ones), and `epoch_recording()`. Window length is a config param with a
@@ -27,7 +34,7 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
   benchmark with a pre-registered go/no-go against SHAP/occlusion.
 - Environment: project-local `.venv/` (Python 3.14, MNE 1.13) because the mamba package cache is corrupted.
   This deviates from CLAUDE.md's 3.11; still an open decision for Ricardo.
-- **Still true:** every `src/core/*.py` stage other than `signal_ingest.py` is a stub, and there is no seizure detector yet.
+- **Still true:** every `src/core/*.py` stage other than `signal_ingest.py` and `metrics_shared.py` is a stub, and there is no seizure detector yet.
 
 **Earlier work (2026-08-26), still accurate unless noted:**
 **Done and real** (not placeholder):
@@ -70,9 +77,10 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 
 ## Immediate next steps (pick one, or say what you want instead)
 
-1. **ROADMAP Phase 1, item 2 (recommended):** implement `src/core/metrics_shared.py`: log band power per
-   channel×band, plus line length, on `EpochedRecording`. Band edges go in a config object flagged provisional.
-   Extend the synthetic smoke test with a planted band-power difference.
+1. **ROADMAP Phase 1, item 3 (recommended):** implement `src/core/perturbation_execution.py`. It needs the 4
+   provisional classes (amplitude attenuation, phase scramble, temporal jitter, structured noise), seeded, with
+   quantize-on-persist at an explicit, flagged precision. `channel_dropout` stays unbuilt. Check on the
+   planted-delta generator that each perturbation moves the C2-delta feature in the expected direction.
 2. **Track A**: state-of-science literature review. It unblocks moving
    `mechanism_aware_interpretation_rubric.md` out of provisional status, and runs in parallel with Phases 1–3.
 3. **Track B pass 2**: external research on the 14 companies job_os's data didn't inform (Ceribell, Merge Labs first).
