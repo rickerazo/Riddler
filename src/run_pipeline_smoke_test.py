@@ -9,9 +9,12 @@ CHB-MIT. Not a scientific result — a wiring check, exactly like GeoBind's smok
 STATUS: partially runnable. Stage 1 (src/core/signal_ingest.py: in-memory ingest, duplicate-
 channel handling, epoching) is checked by check_signal_ingest(); stage 3 (src/core/metrics_shared.py:
 log band power per channel x band, line length, class-averaged phenotypes) is checked by
-check_metrics_shared() against a planted mechanism. Every later stage (hotspot_detection.py,
-perturbation_design.py, perturbation_execution.py, compare.py, interpret_mechanism_profiles.py)
-is still a stub that raises NotImplementedError; the test stops cleanly after stage 3. Stages are filled in
+check_metrics_shared() against a planted mechanism; stage 7 (src/core/perturbation_execution.py:
+the 4 provisional perturbation classes, seeded, quantize-on-persist) is checked by
+check_perturbation_execution() on the same planted-delta generator. Every other stage
+(hotspot_detection.py, the perturbation_design.py table builder, compare.py,
+interpret_mechanism_profiles.py) is still a stub that raises NotImplementedError; the test stops
+cleanly after stage 7. Stages are filled in
 incrementally in ROADMAP.md Phase 1 order.
 """
 
@@ -244,13 +247,170 @@ def check_metrics_shared(sampling_rate_hz: float = 256.0) -> None:
           + np.array2string(d_lbp, precision=2, suppress_small=True))
 
 
+# SMOKE_TEST_ONLY tolerances for the stage-7 check (log10 band-power units). They bound what the
+# Hann-windowed feature reads back from a rectangular-window in-band perturbation on synthetic data;
+# they are not thresholds for real data or for interpretation.
+SMOKE_TEST_ONLY_ATTENUATION_TOL = 0.02     # per-epoch |delta log power - 2*log10(gain)|
+SMOKE_TEST_ONLY_POWER_PRESERVED_TOL = 0.1  # |mean delta log power| for phase scramble / jitter
+SMOKE_TEST_ONLY_SCRAMBLED_MAX_CORR = 0.5   # mean corr(original, scrambled) of the in-band component
+
+
+def _inband(x: np.ndarray, sf: float, band: tuple[float, float]) -> np.ndarray:
+    """Rectangular-window rfft bins of x inside [lo, hi), over the last axis."""
+    f = np.fft.rfftfreq(x.shape[-1], d=1.0 / sf)
+    return np.fft.rfft(x, axis=-1)[..., (f >= band[0]) & (f < band[1])]
+
+
+def check_perturbation_execution(sampling_rate_hz: float = 256.0) -> None:
+    """Stage 7 check on the planted-delta generator: each class does what its hypothesis says, at
+    the target unit only, and the same seed gives bit-identical output (in memory and on disk)."""
+    import dataclasses
+    import hashlib
+    import tempfile
+    from pathlib import Path
+
+    from src.core.perturbation_design import CANDIDATE_PANEL, PerturbationClass
+    from src.core.perturbation_execution import (
+        PROVISIONAL_QUANTIZATION_STEP,
+        PerturbationConfig,
+        apply_perturbation,
+        load_perturbed_signal,
+        persist_perturbed_signal,
+    )
+
+    sf = sampling_rate_hz
+    names = ["C0", "C1", "C2", "C3"]
+    data, _labels = make_planted_delta_recording(n_channels=4, planted_channel=2, sampling_rate_hz=sf)
+    ep = epoch_recording(recording_from_array(data, sf, names), EpochConfig(window_s=2.0))
+    bands = BandConfig()
+    target_ch, target_band = 2, "delta"
+    band_hz = bands.bands[target_band]
+    cfg = PerturbationConfig()  # PROVISIONAL strengths
+    base = compute_epoch_features(ep, bands)
+    ci, bi = base.unit_index(names[target_ch], target_band)
+    far_bands = [b for b in range(len(bands.names)) if bands.names[b] not in (target_band, "theta")]
+    snapshot = ep.data.copy()
+
+    def run(pclass, seed=7):
+        res = apply_perturbation(ep.data, sf, pclass, target_ch, band_hz, seed=seed, config=cfg)
+        feats = compute_epoch_features(dataclasses.replace(ep, data=res.data), bands)
+        return res, feats.log_band_power - base.log_band_power
+
+    results = {}
+    for spec in CANDIDATE_PANEL:
+        res, dlog = run(spec)
+        results[spec.perturbation_class] = (res, dlog)
+        assert res.record["perturbation_class"] == spec.perturbation_class.value
+        assert res.record["provisional"] is True
+        # target unit only: other channels bit-identical, out-of-band bins unchanged, far bands untouched
+        assert np.array_equal(np.delete(res.data, target_ch, axis=1), np.delete(ep.data, target_ch, axis=1))
+        f = np.fft.rfftfreq(ep.data.shape[-1], d=1.0 / sf)
+        oob = ~((f >= band_hz[0]) & (f < band_hz[1]))
+        assert np.allclose(np.fft.rfft(res.data[:, target_ch])[:, oob],
+                           np.fft.rfft(ep.data[:, target_ch])[:, oob], rtol=0, atol=1e-9)
+        assert np.abs(dlog[:, ci, far_bands]).max() < 1e-9, spec.perturbation_class
+    assert np.array_equal(ep.data, snapshot), "apply_perturbation mutated its input"
+
+    orig_ib = _inband(ep.data[:, target_ch], sf, band_hz)
+    p0 = np.sum(np.abs(orig_ib) ** 2, axis=-1)
+
+    # (a) amplitude attenuation: C2-delta log power drops by 2*log10(gain)
+    res, dlog = results[PerturbationClass.AMPLITUDE_ATTENUATION]
+    expected = 2 * np.log10(cfg.attenuation_gain)
+    assert np.all(np.abs(dlog[:, ci, bi] - expected) < SMOKE_TEST_ONLY_ATTENUATION_TOL), dlog[:, ci, bi]
+    p1 = np.sum(np.abs(_inband(res.data[:, target_ch], sf, band_hz)) ** 2, axis=-1)
+    assert np.allclose(p1, cfg.attenuation_gain**2 * p0, rtol=1e-9)
+    att = dlog[:, ci, bi]
+
+    # (b) phase scramble: C2-delta power preserved, waveform changed
+    res, dlog = results[PerturbationClass.PHASE_SCRAMBLE]
+    ps_ib = _inband(res.data[:, target_ch], sf, band_hz)
+    assert np.allclose(np.abs(ps_ib), np.abs(orig_ib), rtol=1e-9, atol=1e-9)  # exact magnitudes
+    assert abs(dlog[:, ci, bi].mean()) < SMOKE_TEST_ONLY_POWER_PRESERVED_TOL, dlog[:, ci, bi].mean()
+    # waveform: correlate the in-band time-domain components, epoch by epoch
+    def inband_wave(x):
+        X = np.fft.rfft(x, axis=-1)
+        X[..., oob] = 0
+        return np.fft.irfft(X, n=x.shape[-1], axis=-1)
+    w0, w1 = inband_wave(ep.data[:, target_ch]), inband_wave(res.data[:, target_ch])
+    corr = np.array([np.corrcoef(a, b)[0, 1] for a, b in zip(w0, w1)])
+    assert corr.mean() < SMOKE_TEST_ONLY_SCRAMBLED_MAX_CORR, corr.mean()
+    assert not np.allclose(res.data[:, target_ch], ep.data[:, target_ch])
+    ps = dlog[:, ci, bi]
+
+    # (c) temporal jitter: power preserved, timing moved within +/- jitter_max_s
+    res, dlog = results[PerturbationClass.TEMPORAL_JITTER]
+    assert np.allclose(np.abs(_inband(res.data[:, target_ch], sf, band_hz)), np.abs(orig_ib), rtol=1e-9, atol=1e-9)
+    assert abs(dlog[:, ci, bi].mean()) < SMOKE_TEST_ONLY_POWER_PRESERVED_TOL
+    assert np.all(np.abs(res.record["params"]["jitter_s"]) <= cfg.jitter_max_s)
+    assert not np.allclose(res.data[:, target_ch], ep.data[:, target_ch])
+    jt = dlog[:, ci, bi]
+
+    # (d) structured noise: injected in-band noise power equals in-band signal power / 10^(snr/10)
+    res, dlog = results[PerturbationClass.STRUCTURED_NOISE_INJECTION]
+    added = _inband(res.data[:, target_ch] - ep.data[:, target_ch], sf, band_hz)
+    assert np.allclose(np.sum(np.abs(added) ** 2, axis=-1), p0 / 10 ** (cfg.noise_snr_db / 10), rtol=1e-9)
+    assert dlog[:, ci, bi].mean() > 0
+    ni = dlog[:, ci, bi]
+
+    # (e) determinism: same seed -> bit-identical; different seed -> different (stochastic classes)
+    for pclass in PerturbationClass:
+        a = apply_perturbation(ep.data, sf, pclass, target_ch, band_hz, seed=7, config=cfg).data
+        b = apply_perturbation(ep.data, sf, pclass, target_ch, band_hz, seed=7, config=cfg).data
+        c = apply_perturbation(ep.data, sf, pclass, target_ch, band_hz, seed=8, config=cfg).data
+        assert np.array_equal(a, b), pclass
+        assert np.array_equal(a, results[pclass][0].data), pclass
+        if pclass is PerturbationClass.AMPLITUDE_ATTENUATION:
+            assert np.array_equal(a, c)  # deterministic lever, seed-independent
+        else:
+            assert not np.array_equal(a, c), pclass
+
+    # (f) quantize on persist: byte-identical files for identical input, round trip within step/2
+    step = PROVISIONAL_QUANTIZATION_STEP
+    with tempfile.TemporaryDirectory() as tmp:
+        digests = []
+        for k in range(2):
+            res = apply_perturbation(ep.data, sf, PerturbationClass.PHASE_SCRAMBLE, target_ch, band_hz,
+                                     seed=7, config=cfg)
+            stem = Path(tmp) / f"run{k}" / "C2_delta_phase_scramble"
+            persist_perturbed_signal(res, stem, step)
+            digests.append(tuple(hashlib.sha256(stem.with_suffix(s).read_bytes()).hexdigest()
+                                 for s in (".npy", ".json")))
+        assert digests[0] == digests[1], digests
+        back, meta = load_perturbed_signal(stem)
+        assert meta["quantization_step"] == step and meta["quantization_step_provisional"] is True
+        assert np.max(np.abs(back - res.data)) <= step / 2 * (1 + 1e-6)
+
+    # (g) channel_dropout is not built (rubric open item) and must be refused, not guessed
+    try:
+        apply_perturbation(ep.data, sf, "channel_dropout", target_ch, band_hz, seed=7)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("channel_dropout was accepted; it must stay unbuilt until Track A")
+
+    th = bands.names.index("theta")
+    print(f"[smoke] perturb: amplitude x{cfg.attenuation_gain} on ({names[target_ch]}, {target_band}) -> "
+          f"d log10 P = {att.mean():.4f} (expected {expected:.4f}; range {att.min():.4f}..{att.max():.4f})")
+    print(f"[smoke] perturb: phase scramble -> d log10 P mean {ps.mean():+.4f} (SD {ps.std():.3f}; "
+          f"rectangular-window power exact), in-band waveform corr mean {corr.mean():.3f}")
+    print(f"[smoke] perturb: jitter (+/-{cfg.jitter_max_s} s) -> d log10 P mean {jt.mean():+.4f}; "
+          f"noise @ {cfg.noise_snr_db} dB SNR -> d log10 P mean {ni.mean():+.4f} "
+          f"(expected ~{np.log10(1 + 10 ** (-cfg.noise_snr_db / 10)):.4f})")
+    print("[smoke] perturb: Hann-leakage spillover into adjacent (C2, theta), mean d log10 P: "
+          + ", ".join(f"{p.value}={results[p][1][:, ci, th].mean():+.3f}" for p in PerturbationClass))
+    print(f"[smoke] perturb: same seed bit-identical (memory + persisted files, sha256 "
+          f"{digests[0][0][:12]}...); quantization step {step} (PROVISIONAL)")
+
+
 def main() -> None:
     check_signal_ingest()
     check_metrics_shared()
+    check_perturbation_execution()
     epoch = make_synthetic_epoch()
     print(f"[smoke] synthetic epoch shape: {epoch.shape}")
     print(
-        "[smoke] STOPPING HERE — downstream stages after metrics (hotspot ranking, perturbation panel, "
+        "[smoke] STOPPING HERE — remaining stages (hotspot ranking, perturbation design table, "
         "comparison, interpretation) are not yet implemented. See src/core/*.py TODOs and "
         "business/bp_v0.md's milestone table."
     )

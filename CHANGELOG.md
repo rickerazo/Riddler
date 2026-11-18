@@ -2,6 +2,53 @@
 
 All notable changes to Riddler are recorded here, most recent first.
 
+## 2026-11-17: ROADMAP Phase 1 item 3, `perturbation_execution.py` implemented
+
+Governing docs: `ARCHITECTURE.md` stage 7 (deterministic, seeded, quantized on persist) and
+`mechanism_aware_interpretation_rubric.md` (panel; **provisional**). Implemented per `ROADMAP.md` Phase 1 item 3.
+
+- `src/core/perturbation_execution.py`: replaced the stub.
+  - `apply_perturbation(data, sampling_rate_hz, spec, channel_indices, band_hz, seed, config)` → `PerturbedSignal`
+    (`data` plus a JSON-serializable provenance `record` with the triple tags, target, seed, params and `provisional: True`).
+    - Time is on the last axis and channels on the second-to-last.
+    - Each (epoch, channel) row is `rfft`'d; only bins with `lo <= f < hi` change (the same rule as `metrics_shared`), then `irfft`.
+    - `seed` has no default. Input is never mutated.
+  - Classes:
+    - `amplitude_attenuation`: in-band × gain;
+    - `phase_scramble`: in-band phases redrawn uniformly, magnitudes kept, DC/Nyquist untouched;
+    - `temporal_jitter`: in-band phase ramp, i.e. a circular delay τ ~ U[−max, max] per row;
+    - `structured_noise_injection`: Gaussian noise band-limited to the hotspot band (or `noise_band_hz`), scaled per row to a fixed in-band SNR.
+    - `channel_dropout` is not built; passing it raises `ValueError`.
+  - Quantize-on-persist: `persist_perturbed_signal()` writes `<stem>.npy` (int64 counts of `step`) plus a sorted-key `<stem>.json`
+    with the step, a sha256 of the counts, and the record. `load_perturbed_signal()` verifies the hash.
+    `.npz` was avoided because zip member headers carry the write time.
+- **Provisional, flagged in code (`PROVISIONAL_*`) and here:**
+  - `attenuation_gain = 0.5` (same as the exploration demo);
+  - `jitter_max_s = 0.1`: the rubric requires a literature-justified window, and this isn't one;
+  - `noise_snr_db = 0.0`;
+  - noise band = hotspot band;
+  - quantization step `1e-9` signal units (1 nV). The basis for the step: the `chb01_03.edf` header shows 12-bit over ±800 µV
+    (digital −2048..2047), an ADC step of ≈0.39 µV, so 1 nV is ≈390× finer. That is a first-pass choice, not a standard.
+    `ARCHITECTURE.md`'s open-decision note is updated. Feature-array precision is still open.
+- `src/run_pipeline_smoke_test.py`: new `check_perturbation_execution()` on the planted-delta generator
+  (perturbing C2-delta). New `SMOKE_TEST_ONLY_*` tolerances: 0.02 / 0.1 / 0.5.
+- No shipped runner or schema touched. The stub was `(*args, **kwargs)` and nothing called it. The smoke test only gained a check.
+
+Verified (`.venv/bin/python -m src.run_pipeline_smoke_test`, all assertions pass):
+- Amplitude ×0.5: C2-delta Δlog10P mean −0.6006 against an expected 2·log10(0.5) = −0.6021. The per-epoch range is −0.6036..−0.5897.
+  Rectangular-window in-band power is exactly ×0.25.
+- Phase scramble: in-band magnitudes are exact. The Hann-feature Δ mean is −0.039, but the per-epoch SD is 0.18.
+  Power is preserved on average, not per epoch, because a Hann periodogram mixes neighbouring bins, so it depends on phase.
+  The in-band waveform corr with the original averages −0.011.
+- Jitter: Δ mean +0.0005. Noise at 0 dB: injected in-band power equals signal power exactly, and Δ mean is +0.278
+  (≈log10 2 = 0.301 expected).
+- For every class, the other channels are bit-identical, out-of-band rfft bins are unchanged (atol 1e-9), and C2 alpha/beta/gamma move by < 1e-9.
+- Same seed gives bit-identical arrays for all 4 classes and byte-identical persisted `.npy` + `.json` (two writes). A different
+  seed changes the 3 stochastic classes; attenuation is seed-independent. The round trip stays within step/2.
+- **Finding to carry into `compare.py`:** the adjacent unit (C2, theta) moves through Hann leakage across the 4 Hz edge.
+  Mean Δ: noise +0.335, scramble +0.058, jitter +0.049, attenuation −0.004. The perturbation is band-exact; the feature's window is not.
+- Cross-machine / cross-NumPy bit-identity is not claimed. That is for the reproducibility audit (Phase 1 item 8).
+
 ## 2026-11-17: ROADMAP Phase 1 item 2, `metrics_shared.py` implemented
 
 Governing doc: `ARCHITECTURE.md` stages 3 and 8 (shared feature extraction, same code on baseline and

@@ -11,6 +11,22 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 ## Where things actually stand
 
 **Latest (2026-11-17):**
+- **ROADMAP Phase 1 item 3 done:** `src/core/perturbation_execution.py` is implemented.
+  `apply_perturbation(data, sfreq, spec, channel_indices, band_hz, seed, config)` edits only the target band's
+  rfft bins on the target channel(s), per (epoch, channel) row. The 4 classes:
+  - amplitude attenuation: gain 0.5;
+  - phase scramble: random in-band phases, magnitudes kept;
+  - temporal jitter: in-band circular delay of ±0.1 s;
+  - structured noise injection: band-limited Gaussian noise at 0 dB in-band SNR.
+  `persist_perturbed_signal()` writes int64 counts at a 1e-9 step (`.npy`) plus a sorted-key `.json` provenance file.
+  It deliberately avoids `.npz`, because `.npz` embeds timestamps.
+  **All strengths and the step are PROVISIONAL.** `channel_dropout` is refused.
+  Smoke test on planted C2-delta:
+  - attenuation gives Δlog10P = −0.6006 against an expected −0.6021;
+  - phase scramble preserves rectangular-window power exactly, shifts the Hann feature by a mean of −0.039 (per-epoch SD 0.18), and drops in-band waveform corr to −0.01;
+  - same seed gives bit-identical arrays and files.
+  **Flag for `compare.py`:** Hann-window leakage moves the adjacent C2-theta unit (noise +0.34, scramble/jitter
+  ≈ +0.05). Off-target *channels* and far bands are untouched.
 - **ROADMAP Phase 1 item 2 done:** `src/core/metrics_shared.py` is implemented. `compute_epoch_features()` gives
   log10 band power per channel×band (Hann PSD integrated per band) and line length per channel.
   `extract_baseline_phenotypes()` gives per-class means and SDs. Band edges (delta 0.5–4 … gamma 30–45 Hz),
@@ -34,7 +50,7 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
   benchmark with a pre-registered go/no-go against SHAP/occlusion.
 - Environment: project-local `.venv/` (Python 3.14, MNE 1.13) because the mamba package cache is corrupted.
   This deviates from CLAUDE.md's 3.11; still an open decision for Ricardo.
-- **Still true:** every `src/core/*.py` stage other than `signal_ingest.py` and `metrics_shared.py` is a stub, and there is no seizure detector yet.
+- **Still true:** every `src/core/*.py` stage other than `signal_ingest.py`, `metrics_shared.py` and `perturbation_execution.py` is a stub, and there is no seizure detector yet.
 
 **Earlier work (2026-08-26), still accurate unless noted:**
 **Done and real** (not placeholder):
@@ -77,10 +93,9 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 
 ## Immediate next steps (pick one, or say what you want instead)
 
-1. **ROADMAP Phase 1, item 3 (recommended):** implement `src/core/perturbation_execution.py`. It needs the 4
-   provisional classes (amplitude attenuation, phase scramble, temporal jitter, structured noise), seeded, with
-   quantize-on-persist at an explicit, flagged precision. `channel_dropout` stays unbuilt. Check on the
-   planted-delta generator that each perturbation moves the C2-delta feature in the expected direction.
+1. **ROADMAP Phase 1, item 4 (recommended):** implement `src/core/compare.py`. It needs signed baseline-vs-perturbed
+   feature deltas plus the **baseline-normalized** disruption score only. Decide explicitly how adjacent-band
+   Hann leakage (the C2-theta spillover above) is reported: as a separate off-target column, not folded into the target score.
 2. **Track A**: state-of-science literature review. It unblocks moving
    `mechanism_aware_interpretation_rubric.md` out of provisional status, and runs in parallel with Phases 1–3.
 3. **Track B pass 2**: external research on the 14 companies job_os's data didn't inform (Ceribell, Merge Labs first).

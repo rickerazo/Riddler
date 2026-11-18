@@ -65,4 +65,6 @@ Ported directly from GeoBind:
   pending Track A literature grounding (surrogate-data methods for `phase_scramble`, EEG artifact/noise
   literature for `structured_noise_injection`, etc.) — see `business/lit_review_science_v1.md`.
 - **Quantization precision** for persisted EEG feature arrays — not yet decided (see reproducibility policy
-  above).
+  above). Perturbed *signals* (stage 7) have a first-pass, PROVISIONAL choice: int64 counts of a 1e-9
+  signal-unit step (1 nV), recorded per artifact; see `src/core/perturbation_execution.py`. Feature-array
+  precision is still open.
