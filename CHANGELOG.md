@@ -2,6 +2,57 @@
 
 All notable changes to Riddler are recorded here, most recent first.
 
+## 2026-11-19: ROADMAP Phase 1 items 8 + 9, reproducibility audit and requirements.txt. Phase 1 exit gate PASSES
+
+Governing docs: `ARCHITECTURE.md` § "Reproducibility policy" (canonical serialization + FAIL/WARN/PASS) and
+`CLAUDE.md` (validation non-negotiable). Implemented in the policy's order: canonical serialization, then the audit.
+
+### Code
+
+- `src/audit_reproducibility.py`: replaced the stub. `AuditVerdict`/`AuditResult` keep their names; `AuditResult`
+  gained an additive `checked` dict and `to_dict()`. New: `canonical_json()`, `persist_run()`, `audit_two_runs()`,
+  `run_two_and_audit()`, CLI `main()`.
+  - Run layout: `hotspot_ranking.json` (`HotspotRanking.to_rows()`), `design_table.json`, `compare_summaries.json`,
+    `mechanism_calls.json` (`MechanismCall.to_row()`), `perturbed/<perturbation_tag>.npy|.json`.
+  - FAIL: any conclusion file differs as parsed JSON, or any conclusion/raw artifact is missing on one side.
+    WARN: only raw perturbed-signal file hashes differ. PASS: all identical. No raw artifacts at all → `ValueError`.
+- `src/run_pipeline_smoke_test.py`:
+  - `run_end_to_end()` gained an optional `perturbed_out_dir=None` kwarg. When set, it persists each perturbed signal
+    and returns an additive `perturbed_artifacts` key. Default behaviour and existing keys are unchanged.
+  - New `run_planted_reproducibility_audit(out_dir)` and `check_reproducibility_audit()`, which returns and prints the
+    Phase 1 exit gate. `main()` now raises `SystemExit` if the gate fails.
+- `requirements.txt` (new): `numpy==2.5.5`, `scipy==1.18.1`, `mne==1.13.2`; only what `src/` imports.
+
+### Flagged (not decided)
+
+- **Float precision in conclusion JSON:** `float_decimals=None` (full float64 repr). Feature-array precision is an
+  open ARCHITECTURE decision, so the audit takes the strictest setting rather than inventing a rounding: any
+  feature jitter is a FAIL. It's a parameter, recorded in `audit_result.json` as provisional.
+- **Compare summaries are FAIL-tier**, beyond the rank/design/call list in the item-8 prompt, because ARCHITECTURE
+  classes feature instability as FAIL. Ranking effect sizes are compared exactly too.
+- **Missing artifact = FAIL**, on the grounds that an incomplete run can't show stable conclusions.
+- **Exact pins** in `requirements.txt` (not lower bounds): the PASS is only claimed for the verified stack.
+- The audit compares two runs on one machine and stack. Cross-platform determinism is untested.
+
+### Verified
+
+- `.venv/bin/python -m src.run_pipeline_smoke_test` exits 0. New lines:
+  - `audit: two planted runs -> PASS: all 12 artifacts identical (4 conclusion, 8 raw)`
+  - tampered copies → `raw_drift: WARN`; `rank`, `design`, `summary` (+1e-12), `call`, `missing_raw`,
+    `missing_conclusion`: all `FAIL`; a format-only rewrite → PASS; WARN gate → medium; FAIL gate →
+    `unstable_not_interpretable`
+  - `('C2', 'delta') -> amplitude_dominant / high with reproducibility_status=PASS (was UNKNOWN)`
+  - **`PHASE 1 EXIT GATE: PASS (planted hotspot True, planted mechanism True, audit PASS)`**
+- Cross-process: two separate Python processes each wrote a planted audit; `python -m src.audit_reproducibility
+  p1/run_a p2/run_b` → PASS (exit 0), and the two `audit_result.json` files are byte-identical (`cmp`).
+- `python -m src.audit_reproducibility` (no args) → PASS, written to `outputs/reproducibility/phase1_planted_amplitude/`
+  (gitignored).
+- Fresh venv: `pip install -r requirements.txt` then the full smoke test → exit gate PASS.
+- **Phase 1 exit gate: PASS.** Scope: synthetic planted data with `SMOKE_TEST_ONLY` thresholds/`n_hotspots`.
+- Runners, schemas and output paths: no existing schema changed. `run_end_to_end` got one optional kwarg and one
+  additive output key. New output path `outputs/reproducibility/` was already gitignored. `check_end_to_end` is
+  unchanged (still UNKNOWN for its own runs).
+
 ## 2026-11-19: ROADMAP Phase 1 item 7, perturbation design table and end-to-end smoke run
 
 Governing docs:

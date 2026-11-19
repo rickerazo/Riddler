@@ -20,11 +20,15 @@ rubric v0.2 rule cascade, None-by-default Thresholds, spillover qualifier, repro
 checked by check_interpret_mechanism_profiles() with SMOKE_TEST_ONLY thresholds; and stage 5
 (src/core/perturbation_design.py: build_perturbation_design_table) plus the whole chain end to end
 (ROADMAP Phase 1 item 7) are checked by check_end_to_end(), which must recover the planted (C2, delta)
-hotspot AND an amplitude_* call. The reproducibility audit (item 8) is not built yet, so the end-to-end
-run passes reproducibility_status="UNKNOWN". Stages are filled in in ROADMAP.md Phase 1 order.
+hotspot AND an amplitude_* call. That run passes reproducibility_status="UNKNOWN"; item 8
+(src/audit_reproducibility.py) is checked by check_reproducibility_audit(), which persists two full runs,
+audits them PASS/WARN/FAIL, feeds the verdict back into the interpretation engine and reports the Phase 1
+exit gate. Stages are filled in in ROADMAP.md Phase 1 order.
 """
 
 from __future__ import annotations
+
+import json
 
 import numpy as np
 
@@ -785,13 +789,20 @@ def run_end_to_end(
     seed: int,
     thresholds,
     reproducibility_status: str = "UNKNOWN",
+    perturbed_out_dir=None,
 ) -> dict:
     """Ingest -> features -> rank_hotspots -> design table -> panel -> compare -> interpret.
 
     Every config is the PROVISIONAL default of its stage except ``n_hotspots``, ``seed`` and
     ``thresholds``, which have no default anywhere and must be passed explicitly. Returns the
-    intermediate products so the caller can assert on each stage.
+    intermediate products so the caller can assert on each stage. If ``perturbed_out_dir`` is
+    given, each perturbed signal is persisted there as ``<perturbation_tag>.npy/.json`` via
+    ``persist_perturbed_signal`` (PROVISIONAL 1e-9 step) and the provenance dicts are returned
+    under ``"perturbed_artifacts"`` (additive key; absent when not persisting).
     """
+    from pathlib import Path
+
+    from src.core.perturbation_execution import persist_perturbed_signal
     import dataclasses
 
     from src.core.compare import compute_disruption_score_normalized
@@ -808,17 +819,25 @@ def run_end_to_end(
     base = compute_epoch_features(ep, bands)                                    # stage 3
     ranking = rank_hotspots(base, labels, positive_label=1)                     # stage 4
     design = build_perturbation_design_table(ranking, bands, n_hotspots=n_hotspots, seed=seed)  # stage 5
-    summaries = []
+    summaries, artifacts = [], {}
     for row in design:                                                          # stages 7 + 9
         res = apply_perturbation(ep.data, sampling_rate_hz, spec_from_design_row(row), row["target_channel_index"],
                                  (row["band_lo_hz"], row["band_hi_hz"]), seed=row["seed"])
+        if perturbed_out_dir is not None:
+            tag = row["perturbation_tag"]
+            if Path(tag).name != tag or tag.startswith("."):
+                raise ValueError(f"perturbation_tag {tag!r} is not a safe file name")
+            artifacts[tag] = persist_perturbed_signal(res, Path(perturbed_out_dir) / tag)
         pert = compute_epoch_features(dataclasses.replace(ep, data=res.data), bands)
         cmp = compute_disruption_score_normalized(
             base, pert, (row["target_channel"], row["target_band"]), record=res.record)
         summaries.append({**cmp.summary(), "perturbation_tag": row["perturbation_tag"],
                           "hotspot_rank": row["hotspot_rank"]})
     calls = interpret_mechanism_profiles(summaries, thresholds, reproducibility_status)  # stage 13
-    return {"ranking": ranking, "design": design, "summaries": summaries, "calls": calls}
+    out = {"ranking": ranking, "design": design, "summaries": summaries, "calls": calls}
+    if perturbed_out_dir is not None:
+        out["perturbed_artifacts"] = artifacts
+    return out
 
 
 def check_end_to_end(sampling_rate_hz: float = 256.0) -> None:
@@ -900,6 +919,137 @@ def check_end_to_end(sampling_rate_hz: float = 256.0) -> None:
           f"second run identical")
 
 
+def run_planted_reproducibility_audit(out_dir, sampling_rate_hz: float = 256.0):
+    """ROADMAP Phase 1 item 8: two full planted-amplitude runs -> persisted artifacts -> audit.
+
+    Each run uses ``reproducibility_status="UNKNOWN"`` (the audit cannot gate the runs it is
+    auditing). The verdict is then fed into ``interpret_mechanism_profiles`` on run A's summaries
+    in place of "UNKNOWN". Returns (AuditResult, final MechanismCall list, run A output dict).
+    """
+    from src.audit_reproducibility import run_two_and_audit
+    from src.core.interpret_mechanism_profiles import Thresholds, interpret_mechanism_profiles
+
+    names = ["C0", "C1", "C2", "C3"]
+    data, labels = make_planted_delta_recording(n_channels=4, planted_channel=2, sampling_rate_hz=sampling_rate_hz)
+    th = Thresholds(**SMOKE_TEST_ONLY_THRESHOLDS)
+
+    def one_run(perturbed_dir):
+        return run_end_to_end(data, labels, names, sampling_rate_hz, n_hotspots=SMOKE_TEST_ONLY_N_HOTSPOTS,
+                              seed=SMOKE_TEST_ONLY_PANEL_SEED, thresholds=th, reproducibility_status="UNKNOWN",
+                              perturbed_out_dir=perturbed_dir)
+
+    result, out_a, _ = run_two_and_audit(one_run, out_dir)
+    calls = interpret_mechanism_profiles(out_a["summaries"], th, reproducibility_status=result.verdict.value)
+    return result, calls, out_a
+
+
+def check_reproducibility_audit(sampling_rate_hz: float = 256.0) -> bool:
+    """ROADMAP Phase 1 item 8 + exit gate. Returns whether the Phase 1 exit gate passes.
+
+    Asserts: two real planted runs audit PASS and the PASS-gated call is amplitude_dominant / high;
+    then, on copies of run B tampered on disk, that raw-only drift -> WARN and a changed rank /
+    design row / compare summary / mechanism call / missing artifact -> FAIL, and that FAIL fed
+    back into the engine yields ``unstable_not_interpretable``.
+    """
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from src.audit_reproducibility import (
+        CALLS_FILE, DESIGN_FILE, PERTURBED_SUBDIR, RANKING_FILE, SUMMARIES_FILE, RESULT_FILE,
+        AuditVerdict, audit_two_runs, canonical_json, run_two_and_audit,
+    )
+    from src.core.interpret_mechanism_profiles import AMP, Thresholds, interpret_mechanism_profiles
+
+    planted = ("C2", "delta")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        result, calls, out_a = run_planted_reproducibility_audit(tmp / "audit", sampling_rate_hz)
+        assert result.verdict is AuditVerdict.PASS, result.reasons
+        assert (tmp / "audit" / RESULT_FILE).is_file()
+        n_raw = len(result.checked["raw_artifacts"])
+        assert n_raw == 2 * len(out_a["design"]), n_raw  # .npy + .json per design row
+        assert len(calls) == 1 and calls[0].hotspot == planted
+        final = calls[0]
+        assert final.reproducibility_status == "PASS"
+        assert final.dominant_mechanism.startswith("amplitude_") and final.leading_class == AMP, final.rationale
+        assert final.confidence == "high", final.confidence
+
+        # refusal: re-using a non-empty out_dir must not silently mix runs
+        try:
+            run_two_and_audit(lambda d: out_a, tmp / "audit")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("non-empty out_dir was reused")
+
+        run_a, run_b = tmp / "audit" / "run_a", tmp / "audit" / "run_b"
+
+        def tampered(label, mutate):
+            dst = tmp / f"tamper_{label}"
+            shutil.copytree(run_b, dst)
+            mutate(dst)
+            return audit_two_runs(run_a, dst)
+
+        def edit_json(name, fn):
+            def _m(d):
+                rows = json.loads((d / name).read_text())
+                fn(rows)
+                (d / name).write_text(canonical_json(rows))
+            return _m
+
+        def flip_count(d):
+            npy = sorted((d / PERTURBED_SUBDIR).glob("*.npy"))[0]
+            arr = np.load(npy)
+            arr.flat[0] += 1  # one 1e-9 count: raw drift far below any feature/call change
+            np.save(npy, arr, allow_pickle=False)
+
+        def rerank(rows):
+            sel = [r for r in rows if r["status"] == "selected"]
+            sel[0]["rank"], sel[1]["rank"] = sel[1]["rank"], sel[0]["rank"]
+
+        cases = {
+            "raw_drift": (flip_count, AuditVerdict.WARN),
+            "rank": (edit_json(RANKING_FILE, rerank), AuditVerdict.FAIL),
+            "design": (edit_json(DESIGN_FILE, lambda r: r[0].update(seed=r[0]["seed"] + 1)), AuditVerdict.FAIL),
+            "summary": (edit_json(SUMMARIES_FILE, lambda r: r[0].update(
+                target_disruption_score_normalized=r[0]["target_disruption_score_normalized"] + 1e-12)),
+                AuditVerdict.FAIL),
+            "call": (edit_json(CALLS_FILE, lambda r: r[0].update(dominant_mechanism="noise_dominant")),
+                     AuditVerdict.FAIL),
+            "missing_raw": (lambda d: sorted((d / PERTURBED_SUBDIR).glob("*.json"))[0].unlink(), AuditVerdict.FAIL),
+            "missing_conclusion": (lambda d: (d / CALLS_FILE).unlink(), AuditVerdict.FAIL),
+        }
+        got = {}
+        for label, (mutate, expected) in cases.items():
+            r = tampered(label, mutate)
+            got[label] = r.verdict.value
+            assert r.verdict is expected, (label, r.verdict, r.reasons)
+        # a formatting-only rewrite of a conclusion file is not a change
+        fmt = tampered("format", lambda d: (d / CALLS_FILE).write_text(
+            json.dumps(json.loads((d / CALLS_FILE).read_text()))))
+        assert fmt.verdict is AuditVerdict.PASS, fmt.reasons
+
+        th = Thresholds(**SMOKE_TEST_ONLY_THRESHOLDS)
+        gated = {s: interpret_mechanism_profiles(out_a["summaries"], th, reproducibility_status=s)[0]
+                 for s in ("WARN", "FAIL")}
+        assert gated["WARN"].confidence == "medium"
+        assert gated["FAIL"].dominant_mechanism == "unstable_not_interpretable"
+
+    hotspot_ok = (out_a["ranking"].top.channel, out_a["ranking"].top.band) == planted
+    mechanism_ok = final.dominant_mechanism.startswith("amplitude_")
+    gate = hotspot_ok and mechanism_ok and result.verdict is AuditVerdict.PASS
+    print(f"[smoke] audit: two planted runs -> {result.verdict.value}: {result.reasons[0]}; "
+          f"float_decimals=None (full repr; feature precision still an OPEN decision)")
+    print(f"[smoke] audit: tampered copies -> {got}; format-only rewrite -> PASS; WARN gate -> medium, "
+          f"FAIL gate -> unstable_not_interpretable")
+    print(f"[smoke] audit: {final.hotspot} -> {final.dominant_mechanism} / {final.confidence} with "
+          f"reproducibility_status={final.reproducibility_status} (was UNKNOWN)")
+    print(f"[smoke] PHASE 1 EXIT GATE: {'PASS' if gate else 'FAIL'} (planted hotspot {hotspot_ok}, "
+          f"planted mechanism {mechanism_ok}, audit {result.verdict.value})")
+    return gate
+
+
 def main() -> None:
     check_signal_ingest()
     check_metrics_shared()
@@ -908,10 +1058,10 @@ def main() -> None:
     check_hotspot_detection()
     check_interpret_mechanism_profiles()
     check_end_to_end()
-    print(
-        "[smoke] all Phase 1 checks through item 7 passed. Remaining: reproducibility audit "
-        "(item 8, src/audit_reproducibility.py), requirements.txt (item 9). See ROADMAP.md."
-    )
+    gate = check_reproducibility_audit()
+    if not gate:
+        raise SystemExit("[smoke] Phase 1 exit gate FAILED")
+    print("[smoke] all Phase 1 checks (items 1-8) passed; Phase 1 exit gate PASS. See ROADMAP.md.")
 
 
 if __name__ == "__main__":

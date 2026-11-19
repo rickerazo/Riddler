@@ -1,8 +1,9 @@
 # Riddler roadmap
 
-Status as of 2026-11-19: Phase 1 items 1–7 are done. Items 1–6 are `signal_ingest.py`, `metrics_shared.py`,
-`perturbation_execution.py`, `compare.py`, `hotspot_detection.py` and `interpret_mechanism_profiles.py`. Item 7 adds
-`perturbation_design.build_perturbation_design_table` plus the end-to-end smoke run. The remaining `src/core/*.py` stages are still
+Status as of 2026-11-19: **Phase 1 is done and its exit gate PASSES** (items 1–9). Items 1–6 are `signal_ingest.py`,
+`metrics_shared.py`, `perturbation_execution.py`, `compare.py`, `hotspot_detection.py` and `interpret_mechanism_profiles.py`.
+Item 7 adds `perturbation_design.build_perturbation_design_table` plus the end-to-end smoke run; item 8 is
+`src/audit_reproducibility.py`; item 9 is `requirements.txt`. Next up is Phase 2. The remaining `src/core/*.py` stages are still
 documented stubs, and **there is no seizure detector yet**, so there's no model for a perturbation to move. One real CHB-MIT recording
 (`chb01_03.edf`) has been explored by hand; see `outputs/exploration/`.
 
@@ -50,10 +51,22 @@ Implement in ARCHITECTURE.md stage order:
    (d = +18.19) and calls it **`amplitude_dominant` / high**, and a second run is identical. **Flagged:** `n_hotspots`
    has no core default; the smoke test passes `SMOKE_TEST_ONLY_N_HOTSPOTS = 1`. The same base seed is used for every
    design row. The run passes `reproducibility_status="UNKNOWN"` until item 8 exists.
-8. `src/audit_reproducibility.py`: two runs → PASS/WARN/FAIL.
-9. `requirements.txt`.
+8. ✅ (2026-11-19) `src/audit_reproducibility.py`: two runs → PASS/WARN/FAIL.
+   Done: each run persists `hotspot_ranking.json`, `design_table.json`, `compare_summaries.json`, `mechanism_calls.json`
+   (canonical JSON) plus `perturbed/<tag>.npy|.json` via `persist_perturbed_signal`. `audit_two_runs(dir_a, dir_b)`:
+   any conclusion file changed or any artifact missing → **FAIL**; only raw perturbed-signal hashes drifted → **WARN**;
+   else **PASS**. Two planted runs (in-process and in two separate processes) → PASS, 12/12 artifacts identical; the
+   PASS is fed into `interpret_mechanism_profiles` → `amplitude_dominant` / high, `reproducibility_status=PASS`.
+   Tampered copies hit WARN (raw-only) and FAIL (rank, design, summary, call, missing file). **Flagged:** conclusion
+   floats are compared at full float64 repr (`float_decimals=None`) because feature precision is still an open
+   ARCHITECTURE decision; compare summaries count as FAIL-tier (ARCHITECTURE: feature instability = FAIL).
+9. ✅ (2026-11-19) `requirements.txt`: numpy 2.5.5, scipy 1.18.1, mne 1.13.2, exact pins of the verified `.venv`
+   (only what `src/` imports). A fresh venv from it passes the full smoke test.
 
 **Exit gate:** the smoke test recovers the planted hotspot **and** the planted mechanism, and the audit is PASS across two runs.
+**✅ PASSED 2026-11-19** (`python -m src.run_pipeline_smoke_test` → `PHASE 1 EXIT GATE: PASS`). Scope of the pass: plumbing
+on synthetic planted data with `SMOKE_TEST_ONLY` thresholds and `n_hotspots`; same machine, same pinned stack. It says
+nothing about real-data performance or cross-platform determinism.
 
 ## Phase 2: Real CHB-MIT plus a baseline detector
 
@@ -129,3 +142,4 @@ What to build:
 | Rubric amendment: calibrate `tau_*` on simulation ground truth | Decide at Phase 4 |
 | Rubric v0.2 slot mapping (amplitude ← attenuation, timing ← mean(phase scramble, jitter), noise ← noise injection) and new `tau_spill` | PROVISIONAL modelling choice; revisit with Track A |
 | Phase 4 pre-registered success margin vs SHAP/occlusion | Set before Phase 4 runs |
+| Audit float precision for conclusion JSON (`float_decimals`) | `None` = full float64 repr (strictest: any feature jitter → FAIL). Tied to the open feature-precision decision in ARCHITECTURE.md |

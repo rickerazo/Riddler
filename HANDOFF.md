@@ -10,7 +10,32 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 
 ## Where things actually stand
 
-**Latest (2026-11-19):**
+**Latest (2026-11-19, items 8 + 9): Phase 1 exit gate PASSES.**
+- `src/audit_reproducibility.py` (was a stub) is implemented:
+  - `persist_run(out, run_dir)` writes `hotspot_ranking.json`, `design_table.json`, `compare_summaries.json`,
+    `mechanism_calls.json` as canonical JSON (sorted keys, strict JSON, NaN → `"NaN"`). Perturbed signals go to
+    `run_dir/perturbed/<perturbation_tag>.npy|.json` via `run_end_to_end(..., perturbed_out_dir=...)` (new optional kwarg).
+  - `audit_two_runs(dir_a, dir_b)` → `AuditResult(verdict, reasons, checked)`. FAIL = any conclusion file differs
+    (parsed-JSON compare, so formatting can't FAIL) or any artifact is missing on one side. WARN = only raw
+    perturbed-signal hashes drifted. PASS = everything identical.
+  - `run_two_and_audit(run_fn, out_dir)` runs twice into `out_dir/run_a|run_b`, refuses a non-empty dir, and writes
+    `audit_result.json`.
+  - CLI: `python -m src.audit_reproducibility` (planted audit → `outputs/reproducibility/phase1_planted_amplitude/`,
+    gitignored) or `python -m src.audit_reproducibility RUN_A RUN_B`.
+- Smoke (`check_reproducibility_audit`): two planted runs → **PASS** (12/12 artifacts: 4 conclusion + 8 raw). The PASS is
+  fed into `interpret_mechanism_profiles` instead of UNKNOWN → (C2, delta) **`amplitude_dominant` / high**,
+  `reproducibility_status=PASS`. Tampered copies: raw-only drift → WARN; rank swap, design seed, a 1e-12 summary nudge,
+  a changed call, a missing raw or conclusion file → FAIL. A WARN gate gives medium; a FAIL gate gives
+  `unstable_not_interpretable`. Two separate Python processes audited against each other also → PASS.
+- **Phase 1 exit gate: PASS.** Scope: synthetic planted data, `SMOKE_TEST_ONLY` thresholds and `n_hotspots`, same machine
+  and pinned stack. Not a real-data or cross-platform claim.
+- **Flagged:** conclusion floats are compared at full float64 repr (`float_decimals=None`), since the feature-precision
+  decision is still open in ARCHITECTURE.md. Compare summaries are FAIL-tier (beyond the rank/design/call list in the
+  item-8 prompt) because ARCHITECTURE says feature instability = FAIL. Missing artifacts are FAIL, not "unauditable".
+- `requirements.txt` (item 9): numpy 2.5.5, scipy 1.18.1, mne 1.13.2, exact pins of the verified `.venv`. A fresh venv
+  built from it passes the full smoke test.
+
+**Earlier (2026-11-19, item 7):**
 - **ROADMAP Phase 1 item 7 done.** That means the end-to-end smoke run works, and part of the Phase 1 exit gate is met.
   - `src/core/perturbation_design.build_perturbation_design_table(ranking, bands, *, n_hotspots, seed, panel=None)` is
     implemented. It is the analog of GeoBind's `build_mechanism_aware_single_design_table`. It writes one
@@ -27,9 +52,8 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
     generator, (C2, delta) is the top hotspot (d = +18.19). The 4-row panel gives D: amplitude 1.290, phase 0.084,
     jitter 0.001, noise 0.596, so the call is **`amplitude_dominant` / high** (`spillover_minor`). These numbers
     match item 6's standalone check exactly. A second full run gives identical tables, summaries and calls.
-  - The end-to-end run passes `reproducibility_status="UNKNOWN"` (no downgrade), because the audit (item 8)
-    doesn't exist yet; it doesn't claim PASS.
-  - **Exit gate status:** hotspot and mechanism recovery pass. The audit-PASS half waits on item 8.
+  - `check_end_to_end` still passes `reproducibility_status="UNKNOWN"` for its own runs; item 8 now supplies the
+    audited status (see Latest).
 
 **Earlier (2026-11-18):**
 - **ROADMAP Phase 1 item 6 done:** `src/core/interpret_mechanism_profiles.py` is implemented.
@@ -136,7 +160,8 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
   benchmark with a pre-registered go/no-go against SHAP/occlusion.
 - Environment: project-local `.venv/` (Python 3.14, MNE 1.13) because the mamba package cache is corrupted.
   This deviates from CLAUDE.md's 3.11; still an open decision for Ricardo.
-- **Still true (updated 2026-11-19):** `src/audit_reproducibility.py` is a stub. Every stage in `src/core/` that Phase 1 uses is implemented. There is no seizure detector yet.
+- **Still true (updated 2026-11-19):** every stage in `src/core/` that Phase 1 uses is implemented, and the audit is
+  live. There is no seizure detector yet (Phase 2).
 
 **Earlier work (2026-08-26), still accurate unless noted:**
 **Done and real** (not placeholder):
@@ -179,13 +204,10 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 
 ## Immediate next steps (pick one, or say what you want instead)
 
-1. **ROADMAP Phase 1, item 8 (recommended):** `src/audit_reproducibility.py`, two runs → PASS/WARN/FAIL.
-   - Run `run_end_to_end()` twice, and persist the design table, compare summaries and calls as canonical JSON.
-     Persist the perturbed signals via `persist_perturbed_signal`.
-   - FAIL = a hotspot rank, design row or mechanism call changed. WARN = only a raw artifact hash drifted.
-   - Feed the audit's status back into `interpret_mechanism_profiles` in place of `UNKNOWN`.
-   - This closes the Phase 1 exit gate.
-2. **ROADMAP Phase 1, item 9:** `requirements.txt`, a small task to pair with item 8.
+1. **ROADMAP Phase 2, item 1 (recommended):** a fetch script for CHB-MIT chb01–chb05 → `data/raw/chbmit/`
+   (gitignored). Idempotent, checksum-verified against PhysioNet's `SHA256SUMS`, no data committed.
+2. **ROADMAP Phase 2, item 2:** `src/modules/seizure_detection/validation.py` (summary-file seizure times, duplicate
+   `T8-P8`, montage changes). Read the real files first.
 3. **Track A**: state-of-science literature review. It grounds the panel, the v0.2 slot mapping and the `tau_*` values.
 4. **Track B pass 2** / informational interviews (these are on Ricardo).
 

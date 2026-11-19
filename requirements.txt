@@ -1,0 +1,10 @@
+# Riddler runtime dependencies (ROADMAP Phase 1 item 9).
+# Pinned to the versions the Phase 1 smoke test + reproducibility audit were verified with
+# (.venv, Python 3.14.3, 2026-11-19). Exact pins on purpose: the audit's PASS is only claimed for this
+# stack; a version bump should be re-audited (python -m src.audit_reproducibility), not assumed safe.
+# Only packages src/ actually imports are listed; transitive deps are left to the resolver (not a lock file).
+numpy==2.5.5
+scipy==1.18.1
+mne==1.13.2
+# Not imported by src/ yet (listed in CLAUDE.md's environment; add when first used):
+# pandas, scikit-learn (Phase 2 baseline detector), matplotlib, torch, torch-geometric
