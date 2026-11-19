@@ -1,6 +1,6 @@
 # Riddler roadmap
 
-Status as of 2026-11-17: Phase 1 items 1–5 (`signal_ingest.py`, `metrics_shared.py`, `perturbation_execution.py`, `compare.py`, `hotspot_detection.py`) are done. Every other `src/core/*.py` stage is still
+Status as of 2026-11-18: Phase 1 items 1–6 (`signal_ingest.py`, `metrics_shared.py`, `perturbation_execution.py`, `compare.py`, `hotspot_detection.py`, `interpret_mechanism_profiles.py`) are done. Every other `src/core/*.py` stage is still
 a documented stub, and **there is no seizure detector yet**, so there's no model for a perturbation to move. One real CHB-MIT recording
 (`chb01_03.edf`) has been explored by hand; see `outputs/exploration/`.
 
@@ -35,10 +35,14 @@ Implement in ARCHITECTURE.md stage order:
    Done: score = Σ weight·|Cohen's d| (`RankingWeights`, PROVISIONAL `log_band_power 1.0, line_length 0.0`), greedy
    cross-shaped neighborhood exclusion (adjacent band via band edges; spatial only from a caller-supplied channel
    adjacency, since the core knows no montage). **No cutoff / top-k**: every unit is selected, suppressed or degenerate.
-6. `src/core/interpret_mechanism_profiles.py`: rule cascade per the rubric. `Thresholds` default to `None` and the
+6. ✅ (2026-11-18) `src/core/interpret_mechanism_profiles.py`: rule cascade per the rubric. `Thresholds` default to `None` and the
    engine refuses to classify while any is `None`. The smoke test passes explicitly labeled
-   `SMOKE_TEST_ONLY` thresholds that are never used on real data.
-7. `src/run_pipeline_smoke_test.py`: end-to-end on the planted-mechanism generator.
+   `SMOKE_TEST_ONLY` thresholds that are never used on real data. Done: the GeoBind cascade was ported into
+   rubric v0.2 (slot mapping amplitude/timing/noise is **PROVISIONAL**). Spillover is a qualifier
+   (`tau_spill`) that downgrades confidence but never changes the call. Planted C2-delta → `amplitude_dominant` / high.
+7. `src/run_pipeline_smoke_test.py`: end-to-end on the planted-mechanism generator. **Note (2026-11-18):** with the
+   log-band-power readout, phase scramble and jitter score ≈ 0 by construction, so a planted *phase* mechanism can't
+   be recovered yet. Plant an amplitude-type mechanism here, or add a phase-sensitive readout first.
 8. `src/audit_reproducibility.py`: two runs → PASS/WARN/FAIL.
 9. `requirements.txt`.
 
@@ -116,4 +120,5 @@ What to build:
 | Python version | `.venv` runs 3.14; CLAUDE.md specifies 3.11. The mamba package cache is corrupted, and fixing it (`mamba clean -a`) affects other envs, so it's the user's call |
 | `outputs/exploration/` in git | Currently untracked; decide whether to gitignore |
 | Rubric amendment: calibrate `tau_*` on simulation ground truth | Decide at Phase 4 |
+| Rubric v0.2 slot mapping (amplitude ← attenuation, timing ← mean(phase scramble, jitter), noise ← noise injection) and new `tau_spill` | PROVISIONAL modelling choice; revisit with Track A |
 | Phase 4 pre-registered success margin vs SHAP/occlusion | Set before Phase 4 runs |

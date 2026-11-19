@@ -1,4 +1,4 @@
-# Handoff — 2026-11-17
+# Handoff — 2026-11-18
 
 Session-continuity note for picking this back up (by a future Claude session or by Ricardo directly). See
 `CHANGELOG.md` for the detailed chronological log this summarizes, and `ROADMAP.md` for the phased
@@ -10,7 +10,31 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 
 ## Where things actually stand
 
-**Latest (2026-11-17):**
+**Latest (2026-11-18):**
+- **ROADMAP Phase 1 item 6 done:** `src/core/interpret_mechanism_profiles.py` is implemented.
+  - The rule conditions were missing from Riddler's rubric. They were recovered from GeoBind
+    (`~/Projects/GeoBind/docs/design/mechanism_aware_interpretation_rubric.md` + `src/interpret_mechanism_profiles.py`)
+    and written into `mechanism_aware_interpretation_rubric.md` § "EEG rule specification (v0.2)" first.
+  - **Slot mapping (PROVISIONAL):**
+    - amplitude ← attenuation;
+    - timing ← mean(phase scramble, jitter);
+    - noise ← noise injection.
+    These stand in for GeoBind's charge/geometry/steric. The cascade, contrasts, confidence gap and
+    reproducibility gate are ported 1:1.
+  - **Spillover resolved:** it is a qualifier, like GeoBind's clash. `spillover_ratio ≥ tau_spill` →
+    `spillover_exceeds_target`, which lowers confidence one level and never changes the call.
+    GeoBind's local/electrostatic support layers were dropped because they have no EEG analog.
+  - `Thresholds` (incl. new `tau_spill`) are all `None` → `ValueError`. The smoke test uses labelled
+    `SMOKE_TEST_ONLY_THRESHOLDS` (GeoBind's dimensionless taus; `tau_material = tau_spill = 1.0` for synthetic scale).
+  - Smoke: the planted (C2, delta) real panel (amp 1.290 / phase 0.084 / jitter 0.001 / noise 0.596) gives
+    **`amplitude_dominant` / high**. All 7 branches, plus `incomplete_panel` and FAIL→`unstable_not_interpretable`,
+    are reachable. WARN takes high→medium, and noise spillover 1.773 qualifies and downgrades. Two runs give
+    byte-identical output.
+  - **Flag for item 7:** under the log-band-power readout, phase scramble and jitter score ≈ 0 by construction, so
+    `timing_dominant` can't fire and a planted *phase* mechanism isn't recoverable yet. Item 7 should plant an
+    amplitude-type mechanism (or add a phase-sensitive readout first).
+
+**Earlier (2026-11-17):**
 - **ROADMAP Phase 1 item 5 done:** `src/core/hotspot_detection.py` is implemented.
   - `rank_hotspots(features, labels, positive_label, weights, neighborhood)` → `HotspotRanking`. Score per unit =
     Σ weight·|Cohen's d| (pooled SD, ddof=1); signed d kept as a column.
@@ -91,7 +115,7 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
   benchmark with a pre-registered go/no-go against SHAP/occlusion.
 - Environment: project-local `.venv/` (Python 3.14, MNE 1.13) because the mamba package cache is corrupted.
   This deviates from CLAUDE.md's 3.11; still an open decision for Ricardo.
-- **Still true:** every `src/core/*.py` stage other than `signal_ingest.py`, `metrics_shared.py`, `perturbation_execution.py`, `compare.py` and `hotspot_detection.py` is a stub, and there is no seizure detector yet.
+- **Still true:** `perturbation_design.py`'s table builder and `src/audit_reproducibility.py` are stubs; everything else in `src/core/` is implemented. There is no seizure detector yet.
 
 **Earlier work (2026-08-26), still accurate unless noted:**
 **Done and real** (not placeholder):
@@ -134,14 +158,15 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 
 ## Immediate next steps (pick one, or say what you want instead)
 
-1. **ROADMAP Phase 1, item 6 (recommended):** implement `src/core/interpret_mechanism_profiles.py`, the rule
-   cascade per `mechanism_aware_interpretation_rubric.md`. `Thresholds` default to `None` and the engine refuses
-   to classify while any is `None`; the smoke test passes explicitly labeled `SMOKE_TEST_ONLY` thresholds. It must
-   also decide (and flag) how the separate adjacent-band spillover column enters a call, if at all.
-2. **Track A**: state-of-science literature review. It unblocks moving
-   `mechanism_aware_interpretation_rubric.md` out of provisional status, and runs in parallel with Phases 1–3.
-3. **Track B pass 2**: external research on the 14 companies job_os's data didn't inform (Ceribell, Merge Labs first).
-4. **Informational interviews**: 18 real contacts and 2 drafted Merge Labs applications. This one is on Ricardo.
+1. **ROADMAP Phase 1, item 7 (recommended):** end-to-end smoke run on the planted-mechanism generator. The chain is
+   ingest → features → `rank_hotspots` → panel on the top selected hotspot(s) → `compare` → `interpret_mechanism_profiles`.
+   It should recover the planted hotspot *and* the `amplitude_*` call. That needs the
+   `perturbation_design.build_perturbation_design_table` stub implemented, plus a decision (flagged) on how many
+   selected hotspots feed the panel. A planted phase mechanism isn't recoverable under the feature readout; see the flag above.
+2. **ROADMAP Phase 1, item 8:** `src/audit_reproducibility.py`, two runs → PASS/WARN/FAIL. It needs item 7's
+   persisted outputs.
+3. **Track A**: state-of-science literature review. It grounds the panel, the v0.2 slot mapping and the `tau_*` values.
+4. **Track B pass 2** / informational interviews (these are on Ricardo).
 
 ## Open decisions still waiting on you
 
@@ -157,6 +182,7 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 | What | Where |
 |---|---|
 | Implementation roadmap (phases + exit gates) | `Riddler/ROADMAP.md` |
+| GeoBind source for ported rules | `~/Projects/GeoBind/docs/design/mechanism_aware_interpretation_rubric.md` |
 | Kickoff plan (full phased plan) | `/Users/rick/.claude/plans/recursive-soaring-bengio.md` |
 | Architecture / non-negotiables | `Riddler/CLAUDE.md`, `Riddler/ARCHITECTURE.md` |
 | Chronological log | `Riddler/CHANGELOG.md` |

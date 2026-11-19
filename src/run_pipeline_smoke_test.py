@@ -15,9 +15,10 @@ check_perturbation_execution() on the same planted-delta generator; stage 9
 (src/core/compare.py: signed deltas + baseline-normalized disruption, adjacent-band spillover as a
 separate off-target column) is checked by check_compare(); stage 4 (src/core/hotspot_detection.py:
 Cohen's-d ranking with PROVISIONAL weights + cross-shaped neighborhood exclusion, no cutoff) is
-checked by check_hotspot_detection(). Every other stage (the perturbation_design.py table builder,
-interpret_mechanism_profiles.py) is still a stub that raises NotImplementedError; the test stops
-cleanly after those checks. Stages are filled in
+checked by check_hotspot_detection(); stage 13 (src/core/interpret_mechanism_profiles.py: the
+rubric v0.2 rule cascade, None-by-default Thresholds, spillover qualifier, reproducibility gate) is
+checked by check_interpret_mechanism_profiles() with SMOKE_TEST_ONLY thresholds. The
+perturbation_design.py table builder is still a stub; the test stops cleanly after those checks. Stages are filled in
 incrementally in ROADMAP.md Phase 1 order.
 """
 
@@ -650,18 +651,135 @@ def check_hotspot_detection(sampling_rate_hz: float = 256.0) -> None:
 
 
 
+# SMOKE_TEST_ONLY interpretation thresholds: never used on real data, never a calibration.
+# tau_dom/weak/broad/high/med are GeoBind's dimensionless defaults (GeoBind rubric), reused here only
+# because the contrasts are dimensionless in both. tau_material = 1.0 (one baseline SD of the
+# normalized score) and tau_spill = 1.0 (spillover >= target) are picked for the synthetic scale.
+SMOKE_TEST_ONLY_THRESHOLDS = dict(
+    tau_dom=0.35, tau_weak=0.15, tau_broad=0.25, tau_material=1.0,
+    tau_high=0.25, tau_med=0.10, tau_spill=1.0, epsilon=1e-9,
+)
+
+
+def check_interpret_mechanism_profiles(sampling_rate_hz: float = 256.0) -> None:
+    """Stage 13 check: the rule cascade (rubric v0.2) on the real planted-C2-delta panel from
+    compare.py, plus hand-built panels that hit every branch. Thresholds are SMOKE_TEST_ONLY.
+
+    Asserts: default (None) Thresholds refuse to classify; the planted panel gets an amplitude
+    call at (C2, delta) with the numbers in its rationale; each cascade branch is reachable;
+    incomplete/duplicate/unknown panels are refused; WARN downgrades and FAIL overrides; spillover
+    above the target qualifies and downgrades without changing the call; output is deterministic.
+    """
+    import dataclasses
+
+    from src.core.compare import compute_disruption_score_normalized
+    from src.core.interpret_mechanism_profiles import (
+        AMP, JITTER, NOISE, PHASE, SPILL_EXCEEDS, SPILL_MINOR,
+        Thresholds, classify_hotspot_mechanism, interpret_mechanism_profiles,
+    )
+    from src.core.perturbation_design import CANDIDATE_PANEL
+    from src.core.perturbation_execution import apply_perturbation
+
+    # (a) uncalibrated thresholds -> refuse
+    try:
+        classify_hotspot_mechanism({AMP: 1.0, PHASE: 0.0, JITTER: 0.0, NOISE: 0.0}, Thresholds())
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("classified with None thresholds")
+    th = Thresholds(**SMOKE_TEST_ONLY_THRESHOLDS)
+
+    # (b) real panel: planted C2-delta, full panel through compare.py (same pipeline as check_compare)
+    sf = sampling_rate_hz
+    names = ["C0", "C1", "C2", "C3"]
+    data, _ = make_planted_delta_recording(n_channels=4, planted_channel=2, sampling_rate_hz=sf)
+    ep = epoch_recording(recording_from_array(data, sf, names), EpochConfig(window_s=2.0))
+    bands = BandConfig()
+    target = ("C2", "delta")
+    base = compute_epoch_features(ep, bands)
+    ci, _ = base.unit_index(*target)
+    summaries = []
+    for spec in CANDIDATE_PANEL:
+        res = apply_perturbation(ep.data, sf, spec, ci, bands.bands[target[1]], seed=7)
+        pert = compute_epoch_features(dataclasses.replace(ep, data=res.data), bands)
+        summaries.append(compute_disruption_score_normalized(base, pert, target, record=res.record).summary())
+    calls = interpret_mechanism_profiles(summaries, th, reproducibility_status="PASS")
+    assert len(calls) == 1 and calls[0].hotspot == target
+    planted = calls[0]
+    assert planted.dominant_mechanism.startswith("amplitude_dominant"), planted.rationale
+    assert planted.leading_class == AMP and planted.spillover_qualifier == SPILL_MINOR
+    assert f"amplitude={planted.D[AMP]:.3f}" in planted.rationale and "PROVISIONAL" in planted.rationale
+    # deterministic, input-order independent
+    again = interpret_mechanism_profiles(list(reversed(summaries)), th, reproducibility_status="PASS")
+    assert [c.to_row() for c in again] == [c.to_row() for c in calls]
+
+    # (c) every cascade branch is reachable (hand-built D panels, order amp/phase/jitter/noise)
+    def call(d, **kw):
+        return classify_hotspot_mechanism(dict(zip((AMP, PHASE, JITTER, NOISE), d)), th, **kw)
+
+    branches = {
+        "broadly_sensitive": (2.0, 1.9, 1.8, 2.1),
+        "amplitude_dominant_anchor": (3.0, 0.1, 0.1, 1.5),
+        "amplitude_dominant": (3.0, 0.1, 0.1, 0.5),
+        "timing_dominant": (0.1, 2.0, 1.8, 0.2),
+        "noise_dominant": (0.1, 0.05, 0.05, 0.6),
+        "mixed_weak_amplitude_led": (0.6, 0.4, 0.4, 0.0),
+        "inconclusive": (0.5, 0.0, 1.0, 0.45),
+    }
+    for expected, d in branches.items():
+        got = call(d)
+        assert got.dominant_mechanism == expected, (expected, got.rationale)
+    assert call(branches["timing_dominant"]).leading_class == PHASE
+
+    # (d) incomplete / non-finite / duplicate / unknown -> refuse
+    inc = classify_hotspot_mechanism({AMP: 1.0, PHASE: 0.0, JITTER: 0.0}, th)
+    assert (inc.dominant_mechanism, inc.confidence) == ("incomplete_panel", "not_interpretable")
+    assert call((1.0, 0.0, float("nan"), 0.0)).dominant_mechanism == "incomplete_panel"
+    for bad in (lambda: interpret_mechanism_profiles(summaries + summaries[:1], th),
+                lambda: classify_hotspot_mechanism({AMP: 1.0, "channel_dropout": 0.0}, th)):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("bad panel was classified")
+
+    # (e) reproducibility gate
+    p = dict(zip((AMP, PHASE, JITTER, NOISE), branches["amplitude_dominant"]))
+    assert classify_hotspot_mechanism(p, th, reproducibility_status="PASS").confidence == "high"
+    assert classify_hotspot_mechanism(p, th, reproducibility_status="WARN").confidence == "medium"
+    fail = classify_hotspot_mechanism(p, th, reproducibility_status="FAIL")
+    assert (fail.dominant_mechanism, fail.confidence) == ("unstable_not_interpretable", "not_interpretable")
+
+    # (f) spillover: real noise-run spillover (adjacent C2-theta) > target -> qualify + downgrade, same call
+    noise_spill = next(s for s in summaries if s["perturbation_class"] == NOISE)
+    sp = noise_spill["offtarget_adjacent_band_max_disruption_normalized"]
+    clean = call(branches["noise_dominant"])
+    spilled = call(branches["noise_dominant"], spillover_adjacent={NOISE: sp})
+    assert spilled.dominant_mechanism == clean.dominant_mechanism == "noise_dominant"
+    assert spilled.spillover_qualifier == SPILL_EXCEEDS and clean.confidence == "high" and spilled.confidence == "medium"
+
+    print(f"[smoke] interpret: SMOKE_TEST_ONLY thresholds {SMOKE_TEST_ONLY_THRESHOLDS}")
+    print(f"[smoke] interpret: planted {target} -> {planted.dominant_mechanism} / {planted.confidence}; "
+          f"{planted.rationale}")
+    print(f"[smoke] interpret: all {len(branches)} cascade branches + incomplete_panel + "
+          f"unstable_not_interpretable reached; WARN high->medium; noise spillover {sp:.3f} vs target 0.6 -> "
+          f"{spilled.spillover_qualifier}, high->medium, call unchanged; rerun identical")
+
+
 def main() -> None:
     check_signal_ingest()
     check_metrics_shared()
     check_perturbation_execution()
     check_compare()
     check_hotspot_detection()
+    check_interpret_mechanism_profiles()
     epoch = make_synthetic_epoch()
     print(f"[smoke] synthetic epoch shape: {epoch.shape}")
     print(
-        "[smoke] STOPPING HERE — remaining stages (perturbation design table, "
-        "interpretation) are not yet implemented. See src/core/*.py TODOs and "
-        "business/bp_v0.md's milestone table."
+        "[smoke] STOPPING HERE — remaining Phase 1 work: perturbation design table "
+        "(perturbation_design.py), end-to-end run on the planted-mechanism generator (item 7), "
+        "reproducibility audit (item 8). See ROADMAP.md."
     )
 
 

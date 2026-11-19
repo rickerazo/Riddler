@@ -2,6 +2,71 @@
 
 All notable changes to Riddler are recorded here, most recent first.
 
+## 2026-11-18: ROADMAP Phase 1 item 6, `interpret_mechanism_profiles.py` implemented
+
+Governing doc: `mechanism_aware_interpretation_rubric.md` (ARCHITECTURE stage 13). It previously named the
+cascade but not the rule conditions. The exact rules were recovered from GeoBind's
+`~/Projects/GeoBind/docs/design/mechanism_aware_interpretation_rubric.md` and `src/interpret_mechanism_profiles.py`.
+They were written into the rubric **first** as a new section, "EEG rule specification (v0.2)", and the code follows it.
+
+### Rubric v0.2
+
+- **Slot mapping (PROVISIONAL, a modelling choice):**
+  - amplitude ← GeoBind charge: `D_amp`;
+  - timing ← geometry: `D_timing = mean(D_phase, D_jitter)`;
+  - noise ← steric: `D_noise`.
+- `D_k` = compare.py's `target_disruption_score_normalized`.
+- Magnitude layer, contrasts (`S_amp`, `S_timing`, `S_noise`, normalized by `R_D`), the 7-rule cascade, the
+  confidence gap `G` and the reproducibility gate (WARN −1 level, FAIL → `unstable_not_interpretable`, UNKNOWN
+  noted) are ported 1:1.
+- **Spillover question resolved (it was open in HANDOFF 2026-11-17):** spillover is an analog of GeoBind's
+  clash qualifier.
+  - `spillover_ratio = adjacent-band spillover of the leading class / its D`.
+  - `≥ tau_spill` → `spillover_exceeds_target` and confidence −1 level. The call itself never changes.
+- **Dropped:** GeoBind's local and electrostatic support layers, plus `tau_local`, `tau_electro` and
+  `tau_clash`. None of these has an EEG analog.
+- **Added:** `tau_spill`.
+- **Thresholds:** every one is `None` by default, and the engine raises `ValueError` until all are set.
+  GeoBind's numeric defaults are not copied into the core; `tau_material = 50` is in GeoBind score units.
+
+### Code
+
+- `src/core/interpret_mechanism_profiles.py`: replaced the stub. It provides:
+  - `Thresholds` (frozen, `require_calibrated()`);
+  - `MechanismCall` with `to_row()`, the rubric's output fields plus `thresholds_provisional`;
+  - `classify_hotspot_mechanism(panel, thresholds, spillover_adjacent, reproducibility_status, hotspot)`;
+  - `interpret_mechanism_profiles(summaries, ...)`, which groups `ComparisonResult.summary()` rows per hotspot.
+    Duplicate classes raise, unknown classes raise, and a missing or non-finite D gives `incomplete_panel`.
+    Output is sorted by hotspot.
+- `src/run_pipeline_smoke_test.py`: added `check_interpret_mechanism_profiles()` with explicitly labelled
+  `SMOKE_TEST_ONLY_THRESHOLDS`:
+  - GeoBind's dimensionless `tau_dom 0.35, tau_weak 0.15, tau_broad 0.25, tau_high 0.25, tau_med 0.10`;
+  - `tau_material 1.0` and `tau_spill 1.0`, picked for the synthetic scale.
+
+### Verified
+
+Ran `.venv/bin/python -m src.run_pipeline_smoke_test` and got exit 0. A second run's output is byte-identical
+(`cmp`).
+- **Planted (C2, delta)**, real panel through compare.py: D = amplitude 1.290, phase 0.084, jitter 0.001,
+  noise 0.596. Normalized contrasts are amplitude 0.968, timing −0.968, noise −0.538. The result is
+  **`amplitude_dominant` / high**, with `spillover_minor` (ratio 0.015).
+- Hand-built panels reach all 7 cascade branches, plus `incomplete_panel` and `unstable_not_interpretable`.
+- WARN takes high → medium.
+- The real noise-run spillover (1.773) on a noise-led panel with target 0.6 gives `spillover_exceeds_target`
+  and takes confidence high → medium, with the call unchanged.
+- `Thresholds()` refuses to classify. Duplicate or unknown classes are refused. Input order doesn't change the output.
+- No existing runner, schema or output path was touched. compare, hotspot and perturbation modules are
+  unchanged; the smoke test only gained a check.
+
+### Flags
+
+- **Known limitation:** with the Phase 1 readout (log band power), phase scramble and jitter preserve power by
+  construction. `D_timing ≈ 0` there, so `timing_dominant` cannot fire on feature deltas. A planted
+  rhythm/phase mechanism (ROADMAP item 7's wording) is therefore **not recoverable** until D comes from a
+  phase-sensitive readout. The engine is readout-agnostic. Item 7 must either plant an amplitude-type
+  mechanism or add a phase-sensitive readout.
+- The `mixed_weak_timing_led` and `mixed_weak_noise_led` branches are implemented but not exercised by the smoke test.
+
 ## 2026-11-17: ROADMAP Phase 1 item 5, `hotspot_detection.py` implemented
 
 Governing doc: `ARCHITECTURE.md` stage 4 (channel×band ranking by class-discriminative signal + spatial/spectral
