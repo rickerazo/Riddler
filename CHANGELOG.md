@@ -2,6 +2,56 @@
 
 All notable changes to Riddler are recorded here, most recent first.
 
+## 2026-11-19: ROADMAP Phase 1 item 7, perturbation design table and end-to-end smoke run
+
+Governing docs:
+- `ARCHITECTURE.md`, stage 5 (perturbation design table), and the stage order 1→3→4→5→7→9→13 for the run;
+- `mechanism_aware_interpretation_rubric.md`, for the fixed panel. `CANDIDATE_PANEL` is unchanged.
+
+### Code
+
+- `src/core/perturbation_design.py`: replaced the `build_perturbation_design_table` stub with
+  `build_perturbation_design_table(ranking, bands, *, n_hotspots, seed, panel=None)`. It returns a list of dicts,
+  one per (selected hotspot × panel member), sorted by (hotspot_rank, panel order). Each row has these columns:
+  `design_table_schema_version` (1), `perturbation_tag`, `hotspot_rank`, `target_channel`, `target_channel_index`,
+  `target_band`, `band_lo_hz`, `band_hi_hz`, `rank_score`, `effect_size_signed`, `perturbation_mode`,
+  `perturbation_class`, `mechanistic_hypothesis`, `seed`, `n_hotspots_requested`, `n_hotspots_provisional`,
+  `panel_provisional`.
+  Also added `perturbation_tag()` and `spec_from_design_row()`.
+  Only `ranking.selected` units are eligible; suppressed and degenerate units never enter the table.
+  It refuses: `n_hotspots` < 1, `n_hotspots` > the selected count, a non-int seed, an empty panel, a panel that
+  repeats a class, and a band missing from the BandConfig.
+- `src/run_pipeline_smoke_test.py`: added `run_end_to_end()` (ingest → features → `rank_hotspots` → design table
+  → `apply_perturbation` per row → `compute_disruption_score_normalized` → `interpret_mechanism_profiles`) and
+  `check_end_to_end()`. `main()` no longer prints the "STOPPING HERE" message.
+
+### Flagged (not decided)
+
+- **How many selected hotspots feed the panel:** `n_hotspots` has **no default** in the core, because no doc
+  specifies a top-k. The smoke test uses `SMOKE_TEST_ONLY_N_HOTSPOTS = 1`, the top selected hotspot, which is all
+  the planted answer key needs. For real data this is a Phase 3 decision.
+- **Seed:** all design rows share one base seed (`SMOKE_TEST_ONLY_PANEL_SEED = 7`, the same as earlier checks).
+  A per-row derivation is undocumented.
+- The end-to-end run passes `reproducibility_status="UNKNOWN"` because item 8's audit doesn't exist yet. UNKNOWN
+  gives no automatic downgrade, and the run doesn't claim PASS.
+
+### Verified
+
+- `.venv/bin/python -m src.run_pipeline_smoke_test` exits 0. Two full runs' stdout is byte-identical (`cmp`).
+- End to end on planted C2-delta:
+  - top selected hotspot is **(C2, delta)**, d = +18.19;
+  - the design table has 4 rows, all on (C2, delta);
+  - D = amplitude 1.290, phase 0.084, jitter 0.001, noise 0.596;
+  - the call is **`amplitude_dominant` / high**, `spillover_minor`, leading class amplitude_attenuation.
+  These are identical to item 6's standalone check. The second in-process run gives identical design rows,
+  summaries and call rows.
+- `n_hotspots=2` expands to ranks [1]×4 + [2]×4 in rank order. Omitting `n_hotspots` gives a `TypeError`. The
+  four bad calls each raise `ValueError`.
+- **Phase 1 exit gate:** hotspot and mechanism recovery pass. The audit-PASS half is still pending (item 8).
+- Runners, schemas and output paths: no existing schema or output path was changed. `perturbation_design.py` only
+  gained functions; `CANDIDATE_PANEL` and the enums are unchanged. The smoke runner gained a check and dropped its
+  "STOPPING HERE" print plus the unused `make_synthetic_epoch` shape print. Nothing new is persisted to disk.
+
 ## 2026-11-18: ROADMAP Phase 1 item 6, `interpret_mechanism_profiles.py` implemented
 
 Governing doc: `mechanism_aware_interpretation_rubric.md` (ARCHITECTURE stage 13). It previously named the

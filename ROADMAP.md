@@ -1,7 +1,9 @@
 # Riddler roadmap
 
-Status as of 2026-11-18: Phase 1 items 1–6 (`signal_ingest.py`, `metrics_shared.py`, `perturbation_execution.py`, `compare.py`, `hotspot_detection.py`, `interpret_mechanism_profiles.py`) are done. Every other `src/core/*.py` stage is still
-a documented stub, and **there is no seizure detector yet**, so there's no model for a perturbation to move. One real CHB-MIT recording
+Status as of 2026-11-19: Phase 1 items 1–7 are done. Items 1–6 are `signal_ingest.py`, `metrics_shared.py`,
+`perturbation_execution.py`, `compare.py`, `hotspot_detection.py` and `interpret_mechanism_profiles.py`. Item 7 adds
+`perturbation_design.build_perturbation_design_table` plus the end-to-end smoke run. The remaining `src/core/*.py` stages are still
+documented stubs, and **there is no seizure detector yet**, so there's no model for a perturbation to move. One real CHB-MIT recording
 (`chb01_03.edf`) has been explored by hand; see `outputs/exploration/`.
 
 Governing docs: `ARCHITECTURE.md` (stage order 1–17, core/module boundary) and
@@ -40,9 +42,14 @@ Implement in ARCHITECTURE.md stage order:
    `SMOKE_TEST_ONLY` thresholds that are never used on real data. Done: the GeoBind cascade was ported into
    rubric v0.2 (slot mapping amplitude/timing/noise is **PROVISIONAL**). Spillover is a qualifier
    (`tau_spill`) that downgrades confidence but never changes the call. Planted C2-delta → `amplitude_dominant` / high.
-7. `src/run_pipeline_smoke_test.py`: end-to-end on the planted-mechanism generator. **Note (2026-11-18):** with the
+7. ✅ (2026-11-19) `src/run_pipeline_smoke_test.py`: end-to-end on the planted-mechanism generator. **Note (2026-11-18):** with the
    log-band-power readout, phase scramble and jitter score ≈ 0 by construction, so a planted *phase* mechanism can't
    be recovered yet. Plant an amplitude-type mechanism here, or add a phase-sensitive readout first.
+   Done: `check_end_to_end()` runs ingest → features → `rank_hotspots` → `build_perturbation_design_table` → panel →
+   `compare` → `interpret_mechanism_profiles` on the planted C2-delta generator. It recovers (C2, delta) as the top hotspot
+   (d = +18.19) and calls it **`amplitude_dominant` / high**, and a second run is identical. **Flagged:** `n_hotspots`
+   has no core default; the smoke test passes `SMOKE_TEST_ONLY_N_HOTSPOTS = 1`. The same base seed is used for every
+   design row. The run passes `reproducibility_status="UNKNOWN"` until item 8 exists.
 8. `src/audit_reproducibility.py`: two runs → PASS/WARN/FAIL.
 9. `requirements.txt`.
 
@@ -116,7 +123,7 @@ What to build:
 
 | Decision | Status |
 |---|---|
-| Epoch window length, band edges, Welch segment length, log floor, quantization precision, perturbation strengths, compare normalizer (SD vs MAD; all-epochs vs control-only spread), hotspot ranking weights + neighborhood radii/shape + how many selected hotspots feed the panel | Config params, provisional until Track A / real distributions |
+| Epoch window length, band edges, Welch segment length, log floor, quantization precision, perturbation strengths, compare normalizer (SD vs MAD; all-epochs vs control-only spread), hotspot ranking weights + neighborhood radii/shape + how many selected hotspots feed the panel (`n_hotspots`: required arg, no default; smoke uses 1) + per-design-row seed derivation (currently one shared base seed) | Config params, provisional until Track A / real distributions |
 | Python version | `.venv` runs 3.14; CLAUDE.md specifies 3.11. The mamba package cache is corrupted, and fixing it (`mamba clean -a`) affects other envs, so it's the user's call |
 | `outputs/exploration/` in git | Currently untracked; decide whether to gitignore |
 | Rubric amendment: calibrate `tau_*` on simulation ground truth | Decide at Phase 4 |

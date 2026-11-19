@@ -1,4 +1,4 @@
-# Handoff — 2026-11-18
+# Handoff — 2026-11-19
 
 Session-continuity note for picking this back up (by a future Claude session or by Ricardo directly). See
 `CHANGELOG.md` for the detailed chronological log this summarizes, and `ROADMAP.md` for the phased
@@ -10,7 +10,28 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 
 ## Where things actually stand
 
-**Latest (2026-11-18):**
+**Latest (2026-11-19):**
+- **ROADMAP Phase 1 item 7 done.** That means the end-to-end smoke run works, and part of the Phase 1 exit gate is met.
+  - `src/core/perturbation_design.build_perturbation_design_table(ranking, bands, *, n_hotspots, seed, panel=None)` is
+    implemented. It is the analog of GeoBind's `build_mechanism_aware_single_design_table`. It writes one
+    execution-ready row per (selected hotspot × panel member), sorted by (rank, panel order). Each row carries the
+    channel index, band edges in Hz, the triple tags, the seed, rank provenance and `perturbation_tag`
+    (e.g. `C2__delta__amplitude_attenuation`), plus `design_table_schema_version` 1.
+    `spec_from_design_row()` rebuilds the spec for execution.
+  - **Flagged, not decided: how many selected hotspots feed the panel.** `n_hotspots` is a required
+    keyword argument with no default. Omitting it gives a `TypeError`; asking for more than the selected count raises
+    instead of shrinking the table. The smoke test passes `SMOKE_TEST_ONLY_N_HOTSPOTS = 1` (the top hotspot).
+    On real data this is a Phase 3 decision.
+  - **Also flagged:** every row shares the same base seed (7 in the smoke test). A per-row seed derivation is undocumented.
+  - `src/run_pipeline_smoke_test.py`: added `run_end_to_end()` and `check_end_to_end()`. On the planted C2-delta
+    generator, (C2, delta) is the top hotspot (d = +18.19). The 4-row panel gives D: amplitude 1.290, phase 0.084,
+    jitter 0.001, noise 0.596, so the call is **`amplitude_dominant` / high** (`spillover_minor`). These numbers
+    match item 6's standalone check exactly. A second full run gives identical tables, summaries and calls.
+  - The end-to-end run passes `reproducibility_status="UNKNOWN"` (no downgrade), because the audit (item 8)
+    doesn't exist yet; it doesn't claim PASS.
+  - **Exit gate status:** hotspot and mechanism recovery pass. The audit-PASS half waits on item 8.
+
+**Earlier (2026-11-18):**
 - **ROADMAP Phase 1 item 6 done:** `src/core/interpret_mechanism_profiles.py` is implemented.
   - The rule conditions were missing from Riddler's rubric. They were recovered from GeoBind
     (`~/Projects/GeoBind/docs/design/mechanism_aware_interpretation_rubric.md` + `src/interpret_mechanism_profiles.py`)
@@ -115,7 +136,7 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
   benchmark with a pre-registered go/no-go against SHAP/occlusion.
 - Environment: project-local `.venv/` (Python 3.14, MNE 1.13) because the mamba package cache is corrupted.
   This deviates from CLAUDE.md's 3.11; still an open decision for Ricardo.
-- **Still true:** `perturbation_design.py`'s table builder and `src/audit_reproducibility.py` are stubs; everything else in `src/core/` is implemented. There is no seizure detector yet.
+- **Still true (updated 2026-11-19):** `src/audit_reproducibility.py` is a stub. Every stage in `src/core/` that Phase 1 uses is implemented. There is no seizure detector yet.
 
 **Earlier work (2026-08-26), still accurate unless noted:**
 **Done and real** (not placeholder):
@@ -158,13 +179,13 @@ suggested next prompt. See `CLAUDE.md` § "Turn protocol".
 
 ## Immediate next steps (pick one, or say what you want instead)
 
-1. **ROADMAP Phase 1, item 7 (recommended):** end-to-end smoke run on the planted-mechanism generator. The chain is
-   ingest → features → `rank_hotspots` → panel on the top selected hotspot(s) → `compare` → `interpret_mechanism_profiles`.
-   It should recover the planted hotspot *and* the `amplitude_*` call. That needs the
-   `perturbation_design.build_perturbation_design_table` stub implemented, plus a decision (flagged) on how many
-   selected hotspots feed the panel. A planted phase mechanism isn't recoverable under the feature readout; see the flag above.
-2. **ROADMAP Phase 1, item 8:** `src/audit_reproducibility.py`, two runs → PASS/WARN/FAIL. It needs item 7's
-   persisted outputs.
+1. **ROADMAP Phase 1, item 8 (recommended):** `src/audit_reproducibility.py`, two runs → PASS/WARN/FAIL.
+   - Run `run_end_to_end()` twice, and persist the design table, compare summaries and calls as canonical JSON.
+     Persist the perturbed signals via `persist_perturbed_signal`.
+   - FAIL = a hotspot rank, design row or mechanism call changed. WARN = only a raw artifact hash drifted.
+   - Feed the audit's status back into `interpret_mechanism_profiles` in place of `UNKNOWN`.
+   - This closes the Phase 1 exit gate.
+2. **ROADMAP Phase 1, item 9:** `requirements.txt`, a small task to pair with item 8.
 3. **Track A**: state-of-science literature review. It grounds the panel, the v0.2 slot mapping and the `tau_*` values.
 4. **Track B pass 2** / informational interviews (these are on Ricardo).
 

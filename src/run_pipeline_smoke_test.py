@@ -17,9 +17,11 @@ separate off-target column) is checked by check_compare(); stage 4 (src/core/hot
 Cohen's-d ranking with PROVISIONAL weights + cross-shaped neighborhood exclusion, no cutoff) is
 checked by check_hotspot_detection(); stage 13 (src/core/interpret_mechanism_profiles.py: the
 rubric v0.2 rule cascade, None-by-default Thresholds, spillover qualifier, reproducibility gate) is
-checked by check_interpret_mechanism_profiles() with SMOKE_TEST_ONLY thresholds. The
-perturbation_design.py table builder is still a stub; the test stops cleanly after those checks. Stages are filled in
-incrementally in ROADMAP.md Phase 1 order.
+checked by check_interpret_mechanism_profiles() with SMOKE_TEST_ONLY thresholds; and stage 5
+(src/core/perturbation_design.py: build_perturbation_design_table) plus the whole chain end to end
+(ROADMAP Phase 1 item 7) are checked by check_end_to_end(), which must recover the planted (C2, delta)
+hotspot AND an amplitude_* call. The reproducibility audit (item 8) is not built yet, so the end-to-end
+run passes reproducibility_status="UNKNOWN". Stages are filled in in ROADMAP.md Phase 1 order.
 """
 
 from __future__ import annotations
@@ -767,6 +769,137 @@ def check_interpret_mechanism_profiles(sampling_rate_hz: float = 256.0) -> None:
           f"{spilled.spillover_qualifier}, high->medium, call unchanged; rerun identical")
 
 
+# SMOKE_TEST_ONLY: how many selected hotspots feed the panel. FLAGGED, NOT DECIDED: the core has
+# no default (build_perturbation_design_table requires it); 1 = "the top selected hotspot", which
+# is all the planted-amplitude answer key needs. On real data this is a Phase 3 decision.
+SMOKE_TEST_ONLY_N_HOTSPOTS = 1
+SMOKE_TEST_ONLY_PANEL_SEED = 7
+
+
+def run_end_to_end(
+    data: np.ndarray,
+    labels: np.ndarray,
+    channel_names: list[str],
+    sampling_rate_hz: float,
+    n_hotspots: int,
+    seed: int,
+    thresholds,
+    reproducibility_status: str = "UNKNOWN",
+) -> dict:
+    """Ingest -> features -> rank_hotspots -> design table -> panel -> compare -> interpret.
+
+    Every config is the PROVISIONAL default of its stage except ``n_hotspots``, ``seed`` and
+    ``thresholds``, which have no default anywhere and must be passed explicitly. Returns the
+    intermediate products so the caller can assert on each stage.
+    """
+    import dataclasses
+
+    from src.core.compare import compute_disruption_score_normalized
+    from src.core.hotspot_detection import rank_hotspots
+    from src.core.interpret_mechanism_profiles import interpret_mechanism_profiles
+    from src.core.perturbation_design import build_perturbation_design_table, spec_from_design_row
+    from src.core.perturbation_execution import apply_perturbation
+
+    bands = BandConfig()
+    rec = recording_from_array(data, sampling_rate_hz, channel_names)          # stage 1 (in memory)
+    ep = epoch_recording(rec, EpochConfig(window_s=2.0))
+    if ep.data.shape[0] != len(labels):
+        raise ValueError(f"{ep.data.shape[0]} epochs but {len(labels)} labels")
+    base = compute_epoch_features(ep, bands)                                    # stage 3
+    ranking = rank_hotspots(base, labels, positive_label=1)                     # stage 4
+    design = build_perturbation_design_table(ranking, bands, n_hotspots=n_hotspots, seed=seed)  # stage 5
+    summaries = []
+    for row in design:                                                          # stages 7 + 9
+        res = apply_perturbation(ep.data, sampling_rate_hz, spec_from_design_row(row), row["target_channel_index"],
+                                 (row["band_lo_hz"], row["band_hi_hz"]), seed=row["seed"])
+        pert = compute_epoch_features(dataclasses.replace(ep, data=res.data), bands)
+        cmp = compute_disruption_score_normalized(
+            base, pert, (row["target_channel"], row["target_band"]), record=res.record)
+        summaries.append({**cmp.summary(), "perturbation_tag": row["perturbation_tag"],
+                          "hotspot_rank": row["hotspot_rank"]})
+    calls = interpret_mechanism_profiles(summaries, thresholds, reproducibility_status)  # stage 13
+    return {"ranking": ranking, "design": design, "summaries": summaries, "calls": calls}
+
+
+def check_end_to_end(sampling_rate_hz: float = 256.0) -> None:
+    """ROADMAP Phase 1 item 7: the whole chain on the planted-amplitude generator.
+
+    Answer key: the seizure class differs from control only in delta-tone amplitude on C2, so the
+    run must (a) rank (C2, delta) as the top selected hotspot and (b) call it ``amplitude_*``.
+    Also asserts the design table's shape/tags/refusals and that two runs are identical.
+    Thresholds are SMOKE_TEST_ONLY; n_hotspots is SMOKE_TEST_ONLY (flagged above).
+    """
+    from src.core.interpret_mechanism_profiles import AMP, Thresholds
+    from src.core.perturbation_design import (
+        CANDIDATE_PANEL,
+        build_perturbation_design_table,
+    )
+
+    names = ["C0", "C1", "C2", "C3"]
+    planted = ("C2", "delta")
+    data, labels = make_planted_delta_recording(n_channels=4, planted_channel=2, sampling_rate_hz=sampling_rate_hz)
+    th = Thresholds(**SMOKE_TEST_ONLY_THRESHOLDS)
+    kw = dict(n_hotspots=SMOKE_TEST_ONLY_N_HOTSPOTS, seed=SMOKE_TEST_ONLY_PANEL_SEED, thresholds=th,
+              reproducibility_status="UNKNOWN")  # audit (item 8) not built yet: don't claim PASS
+    out = run_end_to_end(data, labels, names, sampling_rate_hz, **kw)
+
+    # (a) planted hotspot recovered, and it is what the panel was run on
+    ranking, design = out["ranking"], out["design"]
+    assert (ranking.top.channel, ranking.top.band) == planted, ranking.top
+    assert len(design) == SMOKE_TEST_ONLY_N_HOTSPOTS * len(CANDIDATE_PANEL)
+    assert {(r["target_channel"], r["target_band"]) for r in design} == {planted}
+    assert [r["perturbation_class"] for r in design] == [s.perturbation_class.value for s in CANDIDATE_PANEL]
+    assert all(r["hotspot_rank"] == 1 and r["n_hotspots_provisional"] for r in design)
+    assert len({r["perturbation_tag"] for r in design}) == len(design)
+
+    # (b) planted mechanism recovered: amplitude_* call on the planted unit
+    calls = out["calls"]
+    assert len(calls) == 1 and calls[0].hotspot == planted, [c.hotspot for c in calls]
+    call = calls[0]
+    assert call.dominant_mechanism.startswith("amplitude_"), call.rationale
+    assert call.leading_class == AMP
+
+    # (c) determinism: a second full run gives identical tables, summaries and calls
+    again = run_end_to_end(data, labels, names, sampling_rate_hz, **kw)
+    assert again["design"] == design and again["summaries"] == out["summaries"]
+    assert [c.to_row() for c in again["calls"]] == [c.to_row() for c in calls]
+
+    # (d) design-table contract: larger n expands in rank order; bad n / panel refused, not guessed
+    from src.core.metrics_shared import BandConfig as _BC
+    two = build_perturbation_design_table(ranking, _BC(), n_hotspots=2, seed=SMOKE_TEST_ONLY_PANEL_SEED)
+    assert [r["hotspot_rank"] for r in two] == [1] * 4 + [2] * 4
+    assert (two[4]["target_channel"], two[4]["target_band"]) == (ranking.selected[1].channel, ranking.selected[1].band)
+    bad_calls = [
+        lambda: build_perturbation_design_table(ranking, _BC(), n_hotspots=0, seed=7),
+        lambda: build_perturbation_design_table(ranking, _BC(), n_hotspots=len(ranking.selected) + 1, seed=7),
+        lambda: build_perturbation_design_table(ranking, _BC(), n_hotspots=1, seed=7,
+                                                panel=CANDIDATE_PANEL + CANDIDATE_PANEL[:1]),
+        lambda: build_perturbation_design_table(ranking, _BC(), n_hotspots=1, seed=None),
+    ]
+    for i, bad in enumerate(bad_calls):
+        try:
+            bad()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"bad design-table call #{i} was not refused")
+    try:
+        build_perturbation_design_table(ranking, _BC(), seed=7)  # n_hotspots has no default
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("n_hotspots defaulted silently")
+
+    D = ", ".join(f"{k}={v:.3f}" for k, v in call.D.items())
+    print(f"[smoke] end-to-end: n_hotspots={SMOKE_TEST_ONLY_N_HOTSPOTS} (SMOKE_TEST_ONLY; no core default), "
+          f"seed={SMOKE_TEST_ONLY_PANEL_SEED}; top hotspot {ranking.top.channel, ranking.top.band} "
+          f"d={ranking.top.effect_size_signed:+.2f}; design table {len(design)} rows")
+    print(f"[smoke] end-to-end: panel D: {D}")
+    print(f"[smoke] end-to-end: {call.hotspot} -> {call.dominant_mechanism} / {call.confidence} "
+          f"(spillover {call.spillover_qualifier}); planted hotspot + amplitude mechanism RECOVERED; "
+          f"second run identical")
+
+
 def main() -> None:
     check_signal_ingest()
     check_metrics_shared()
@@ -774,12 +907,10 @@ def main() -> None:
     check_compare()
     check_hotspot_detection()
     check_interpret_mechanism_profiles()
-    epoch = make_synthetic_epoch()
-    print(f"[smoke] synthetic epoch shape: {epoch.shape}")
+    check_end_to_end()
     print(
-        "[smoke] STOPPING HERE — remaining Phase 1 work: perturbation design table "
-        "(perturbation_design.py), end-to-end run on the planted-mechanism generator (item 7), "
-        "reproducibility audit (item 8). See ROADMAP.md."
+        "[smoke] all Phase 1 checks through item 7 passed. Remaining: reproducibility audit "
+        "(item 8, src/audit_reproducibility.py), requirements.txt (item 9). See ROADMAP.md."
     )
 
 
